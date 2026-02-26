@@ -67,18 +67,9 @@ signRawTxBtn.onclick = async () => {
     log('Creating gRPC client for: ' + grpcEndpoint);
     const grpcClient = new wasm.GrpcClient(grpcEndpoint);
 
-    // 3. Create spend condition using wallet PKH (single, no timelock)
-    log('Creating spend condition for PKH: ' + walletPkh);
-    const pkh = wasm.Pkh.single(walletPkh);
-    const spendCondition = wasm.SpendCondition.newPkh(pkh);
-
-    // 4. Get firstName from spend condition
-    const firstName = spendCondition.firstName();
-    log('First name: ' + firstName.value.substring(0, 20) + '...');
-
-    // 5. Query notes matching this firstName
+    // 3. Query notes by address (0.2 API)
     log('Querying notes from gRPC...');
-    const balance = await grpcClient.getBalanceByFirstName(firstName.value);
+    const balance = await grpcClient.getBalanceByAddress(walletPkh);
 
     if (!balance || !balance.notes || balance.notes.length === 0) {
       log('No notes found - wallet might be empty');
@@ -87,76 +78,95 @@ signRawTxBtn.onclick = async () => {
 
     log('Found ' + balance.notes.length + ' notes');
 
-    // Convert notes from protobuf
-    const notes = balance.notes.map((n: any) => wasm.Note.fromProtobuf(n.note));
+    // Convert notes from protobuf (0.2: free function)
+    const notes = balance.notes
+      .map((entry: any) => entry.note)
+      .filter(Boolean)
+      .map((noteProto: any) => wasm.note_from_protobuf(noteProto));
+
+    if (!notes.length) {
+      log('No parseable notes found');
+      return;
+    }
+
     const note = notes[0];
     const noteAssets = note.assets;
     log('Using note with ' + noteAssets + ' nicks');
 
-    // 6. Build transaction (send 10 NOCK = 655360 nicks)
-    const TEN_NOCK_IN_NICKS = BigInt(10 * 65536);
-    const feePerWord = BigInt(32768); // 0.5 NOCK per word
+    // 4. Build transaction (send 10 NOCK = 655360 nicks)
+    const TEN_NOCK_IN_NICKS = String(10 * 65536);
+    const feePerWord = '32768'; // 0.5 NOCK per word
 
     log('Building transaction to send 10 NOCK...');
-    const builder = new wasm.TxBuilder(feePerWord);
+    const builder = new wasm.TxBuilder({
+      tx_engine_version: 1,
+      tx_engine_patch: 0,
+      min_fee: '256',
+      cost_per_word: feePerWord,
+      witness_word_div: 1,
+    });
 
-    // Create recipient digest
-    const recipientDigest = new wasm.Digest(recipient);
+    // 0.2 spend condition type: LockPrimitive[]
+    const spendCondition = [{ Pkh: { m: 1, hashes: [walletPkh] } }];
 
-    // Create refund digest (same as wallet PKH)
-    const refundDigest = new wasm.Digest(walletPkh);
-
-    // Use simpleSpend (no lockData for lower fees)
+    // Use simpleSpend (no lockData for lower fees), digest values are strings in 0.2
     builder.simpleSpend(
-      [notes[0]],
+      [note],
       [spendCondition],
-      recipientDigest,
+      recipient,
       TEN_NOCK_IN_NICKS,
       null, // fee_override (let it auto-calculate)
-      refundDigest,
+      walletPkh,
       false // include_lock_data
     );
 
-    // 7. Build the transaction and get notes/spend conditions
+    // 5. Build the transaction and get notes/spend conditions
     log('Building raw transaction...');
     const nockchainTx = builder.build();
     const txId = nockchainTx.id;
-    log('Transaction ID: ' + txId.value);
-
-    const rawTxProtobuf = nockchainTx.toRawTx().toProtobuf();
+    log('Transaction ID: ' + txId);
 
     // Get notes and spend conditions from builder
     const txNotes = builder.allNotes();
 
     log('Notes count: ' + txNotes.notes.length);
-    log('Spend conditions count: ' + txNotes.spendConditions.length);
+    log('Spend conditions count: ' + txNotes.spend_conditions.length);
 
-    // 8. Sign using provider.signRawTx (pass wasm objects directly)
+    // 0.2 raw tx is plain data
+    const rawTx = {
+      version: 1 as const,
+      id: nockchainTx.id,
+      spends: nockchainTx.spends,
+    };
+
+    // 6. Sign using provider.signRawTx
     log('Signing transaction...');
     const signedTxProtobuf = await provider.signRawTx({
-      rawTx: rawTxProtobuf, // Pass wasm RawTx directly
-      notes: txNotes.notes, // Pass wasm Note objects directly
-      spendConditions: txNotes.spendConditions, // Pass wasm SpendCondition objects directly
+      rawTx,
+      notes: txNotes.notes,
+      spendConditions: txNotes.spend_conditions,
     });
 
     log('Transaction signed successfully!');
 
-    // Convert to jam string for file download
-    const signedTx = wasm.RawTx.fromProtobuf(signedTxProtobuf);
-    const jamBytes = signedTx.toJam();
-
-    // 9. Download to file using transaction ID
+    // 7. Convert signed tx to Jam and download
+    const signedTxProto =
+      typeof signedTxProtobuf === 'object' && !(signedTxProtobuf instanceof Uint8Array)
+        ? signedTxProtobuf
+        : (signedTxProtobuf as unknown as wasm.PbCom2RawTransaction);
+    const signedRawTx = wasm.rawTxFromProtobuf(signedTxProto);
+    const jamBytes = wasm.jam(signedRawTx as unknown as wasm.Noun);
     const blob = new Blob([new Uint8Array(jamBytes)], { type: 'application/jam' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${txId.value}.tx`;
+    a.download = `${txId}.tx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    log('Downloaded transaction to file: ' + txId.value + '.tx');
+    log('Downloaded signed transaction (Jam): ' + txId + '.tx');
   } catch (e: any) {
     log('Error: ' + e.message);
     console.error(e);

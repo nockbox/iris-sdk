@@ -47,6 +47,6 @@
   },
   "dependencies": {
     "@scure/base": "^2.0.0",
-    "@nockbox/iris-wasm": "^0.1.1"
+    "@nockbox/iris-wasm": "0.2.0-alpha.2"
   }
 }

@@ -269,8 +269,8 @@ function createDefaultLocksWithPkh() {
     // Coinbase lock (PKH + timelock)
     const pkhPrim: wasm.LockPrimitive = { Pkh: { m: 1, hashes: [state.walletPkh] } };
     const coinbaseTim: wasm.LockTim = {
-      rel: { min: 100, max: undefined },
-      abs: { min: undefined, max: undefined },
+      rel: { min: 100, max: null },
+      abs: { min: null, max: null },
     };
     const timPrim: wasm.LockPrimitive = { Tim: coinbaseTim };
     const spendCondition: wasm.SpendCondition = [pkhPrim, timPrim];
@@ -679,7 +679,7 @@ function updateBuilder() {
         const seedLock = state.locks.find(l => l.id === seed.lockId);
         if (seedLock) {
           const seedV1: wasm.SeedV1 = {
-            output_source: undefined,
+            output_source: null,
             lock_root: { Lock: seedLock.spendCondition },
             note_data: [],
             gift: seed.amount,
@@ -1419,15 +1419,15 @@ function confirmAddLock() {
           if (timConfig.type === 'csv') {
             primitives.push({
               Tim: {
-                rel: { min: value, max: undefined },
-                abs: { min: undefined, max: undefined },
+                rel: { min: value, max: null },
+                abs: { min: null, max: null },
               },
             });
           } else {
             primitives.push({
               Tim: {
-                rel: { min: undefined, max: undefined },
-                abs: { min: value, max: undefined },
+                rel: { min: null, max: null },
+                abs: { min: value, max: null },
               },
             });
           }

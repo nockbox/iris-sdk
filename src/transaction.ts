@@ -5,6 +5,7 @@
 import { base58 } from '@scure/base';
 import type { Transaction } from './types.js';
 import { InvalidAddressError, InvalidTransactionError } from './errors.js';
+import { parseNicksLike } from './compat.js';
 
 /**
  * Conversion rate: 1 NOCK = 65,536 nicks (2^16)
@@ -151,11 +152,20 @@ export class TransactionBuilder {
    * @throws {InvalidTransactionError} If the transaction amount or fee is invalid
    */
   static fromTransaction(tx: Transaction): TransactionBuilder {
-    // Use setters to ensure validation is applied
-    let builder = new TransactionBuilder().to(tx.to).amount(tx.amount);
+    const amountNumber = Number(parseNicksLike(tx.amount, 'amount'));
+    if (!Number.isSafeInteger(amountNumber) || amountNumber < MIN_AMOUNT) {
+      throw new InvalidTransactionError('Amount is outside safe integer range');
+    }
 
-    if (typeof tx.fee === 'number') {
-      builder = builder.fee(tx.fee);
+    // Use setters to ensure validation is applied
+    let builder = new TransactionBuilder().to(tx.to).amount(amountNumber);
+
+    if (tx.fee !== undefined) {
+      const feeNumber = Number(parseNicksLike(tx.fee, 'fee'));
+      if (!Number.isSafeInteger(feeNumber) || feeNumber < 0) {
+        throw new InvalidTransactionError('Fee is outside safe integer range');
+      }
+      builder = builder.fee(feeNumber);
     }
 
     return builder;

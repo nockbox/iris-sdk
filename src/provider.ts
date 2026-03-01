@@ -6,6 +6,7 @@ import type { Transaction, NockchainEvent, EventListener, InjectedNockchain } fr
 import { TransactionBuilder } from './transaction.js';
 import { WalletNotInstalledError, UserRejectedError, RpcError, NoAccountError } from './errors.js';
 import { PROVIDER_METHODS } from './constants.js';
+import { normalizeTransaction } from './compat.js';
 
 /**
  * NockchainProvider class - Main interface for dApps to interact with Iris wallet
@@ -115,9 +116,11 @@ export class NockchainProvider {
       throw new NoAccountError();
     }
 
+    const normalizedTx = normalizeTransaction(transaction);
+
     return this.request<string>({
       method: PROVIDER_METHODS.SEND_TRANSACTION,
-      params: [transaction],
+      params: [normalizedTx],
     });
   }
 

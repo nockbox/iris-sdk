@@ -5,13 +5,15 @@
 /**
  * Transaction object representing a Nockchain transaction
  */
+export type NicksLike = number | string | bigint;
+
 export interface Transaction {
   /** Recipient address (base58-encoded public key hash / PKH) */
   to: string;
-  /** Amount to send in nicks (1 NOCK = 65,536 nicks) */
-  amount: number;
-  /** Transaction fee in nicks (optional, defaults to 32,768 = 0.5 NOCK) */
-  fee?: number;
+  /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
+  amount: NicksLike;
+  /** Transaction fee in nicks (legacy number + canonical string/bigint accepted) */
+  fee?: NicksLike;
 }
 
 /**

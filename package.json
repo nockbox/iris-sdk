@@ -17,10 +17,10 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "vendor/iris-wasm"
   ],
   "scripts": {
-    "prepare": "npm run build",
     "build": "tsc",
     "build-example": "npm run build && tsc --project examples/tsconfig.json && vite build --config vite.config.examples.ts",
     "dev": "tsc --watch",
@@ -50,7 +50,7 @@
     "url": "https://github.com/nockbox/iris-sdk.git"
   },
   "dependencies": {
-    "@nockbox/iris-wasm": "^0.2.0-alpha.3",
+    "@nockbox/iris-wasm": "file:./vendor/iris-wasm",
     "@scure/base": "^2.0.0"
   }
 }

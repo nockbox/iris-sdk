@@ -166,7 +166,7 @@ export async function buildBridgeTransaction(
 
     const parentHash = wasm.note_hash(note);
     const seed: SeedV1 = {
-      output_source: undefined,
+      output_source: null,
       lock_root: bridgeLockRoot,
       note_data: noteData,
       gift: params.amountInNicks,

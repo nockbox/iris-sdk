@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./wasm": {
+      "types": "./dist/wasm.d.ts",
+      "import": "./dist/wasm.js"
     }
   },
   "files": [
@@ -46,7 +50,7 @@
     "url": "https://github.com/nockbox/iris-sdk.git"
   },
   "dependencies": {
-    "@scure/base": "^2.0.0",
-    "@nockbox/iris-wasm": "0.2.0-alpha.2"
+    "@nockbox/iris-wasm": "^0.2.0-alpha.3",
+    "@scure/base": "^2.0.0"
   }
 }

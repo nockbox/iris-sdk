@@ -1,0 +1,32 @@
+{
+  "name": "@nockbox/iris-wasm",
+  "type": "module",
+  "collaborators": [
+    "NockBox inc. <tech@nockbox.org>"
+  ],
+  "description": "WASM bindings for Iris wallet",
+  "version": "0.2.0-alpha.3",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nockbox/iris-rs"
+  },
+  "files": [
+    "iris_wasm_bg.wasm",
+    "iris_wasm.js",
+    "iris_wasm.d.ts",
+    "iris_wasm.guard.ts"
+  ],
+  "main": "iris_wasm.js",
+  "homepage": "https://nockbox.org",
+  "types": "iris_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ],
+  "keywords": [
+    "nockchain",
+    "iris",
+    "wallet",
+    "nock"
+  ]
+}

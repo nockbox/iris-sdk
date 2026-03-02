@@ -1,7 +1,13 @@
 import type {
+  BuildV0MigrationFromMnemonicParams,
+  BuildV0MigrationFromMnemonicResult,
   BuildV0MigrationTransactionParams,
   BuildV0MigrationTransactionResult,
+  DeriveV0AddressParams,
+  DerivedV0Address,
   QueryV0BalanceParams,
+  QueryV0BalanceFromMnemonicParams,
+  QueryV0BalanceFromMnemonicResult,
   QueryV0BalanceResult,
 } from './migration-types.js';
 import type {
@@ -13,6 +19,7 @@ import type {
   TxEngineSettings,
   TxNotes,
 } from '@nockbox/iris-wasm/iris_wasm.js';
+import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
 
 function buildSinglePkhSpendCondition(pkh: string): SpendCondition {
@@ -27,15 +34,47 @@ function isNoteV0(note: Note): note is NoteV0 {
   return 'inner' in note && 'sig' in note && 'source' in note;
 }
 
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function sumNicks(notes: NoteV0[]): string {
+  const total = notes.reduce((acc, note) => acc + BigInt(note.assets), 0n);
+  return total.toString();
+}
+
+/**
+ * Derive legacy v0 address metadata from mnemonic.
+ *
+ * v0 discovery queries use the base58-encoded bare public key ("sourceAddress").
+ * We also expose the hashed PKH digest for callers that need lock condition metadata.
+ */
+export function deriveV0AddressFromMnemonic(params: DeriveV0AddressParams): DerivedV0Address {
+  const master = wasm.deriveMasterKeyFromMnemonic(params.mnemonic, params.passphrase ?? '');
+  const key = params.childIndex === undefined ? master : master.deriveChild(params.childIndex);
+  const publicKey = Uint8Array.from(key.publicKey);
+
+  return {
+    sourceAddress: base58.encode(publicKey),
+    sourcePkh: wasm.hashPublicKey(publicKey),
+    publicKeyHex: toHex(publicKey),
+  };
+}
+
 /**
  * Query address balance and return only v0 (Legacy) notes.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  */
-export async function queryV0BalanceForPkh(
+export async function queryV0BalanceForAddress(
   params: QueryV0BalanceParams
 ): Promise<QueryV0BalanceResult> {
+  const sourceAddress = params.sourceAddress ?? params.sourcePkh;
+  if (!sourceAddress) {
+    throw new Error('sourceAddress is required');
+  }
+
   const grpcClient = new wasm.GrpcClient(params.grpcEndpoint);
-  const balance = await grpcClient.getBalanceByAddress(params.sourcePkh);
+  const balance = await grpcClient.getBalanceByAddress(sourceAddress);
 
   const v0Notes: NoteV0[] = [];
   const entries = balance.notes ?? [];
@@ -52,6 +91,35 @@ export async function queryV0BalanceForPkh(
   return {
     balance,
     v0Notes,
+    totalNicks: sumNicks(v0Notes),
+  };
+}
+
+/**
+ * Back-compat alias kept for older callers.
+ * Despite the name, this resolves to address-based lookup via getBalanceByAddress.
+ */
+export async function queryV0BalanceForPkh(
+  params: QueryV0BalanceParams
+): Promise<QueryV0BalanceResult> {
+  return queryV0BalanceForAddress(params);
+}
+
+/**
+ * Derive v0 discovery address from mnemonic and query legacy notes in one step.
+ */
+export async function queryV0BalanceFromMnemonic(
+  params: QueryV0BalanceFromMnemonicParams
+): Promise<QueryV0BalanceFromMnemonicResult> {
+  const derived = deriveV0AddressFromMnemonic(params);
+  const queried = await queryV0BalanceForAddress({
+    grpcEndpoint: params.grpcEndpoint,
+    sourceAddress: derived.sourceAddress,
+  });
+
+  return {
+    ...derived,
+    ...queried,
   };
 }
 
@@ -109,9 +177,35 @@ export async function buildV0MigrationTransaction(
   };
 }
 
+/**
+ * Derive v0 address, query legacy notes, and build migration transaction.
+ */
+export async function buildV0MigrationFromMnemonic(
+  params: BuildV0MigrationFromMnemonicParams
+): Promise<BuildV0MigrationFromMnemonicResult> {
+  const discovery = await queryV0BalanceFromMnemonic(params);
+  const built = await buildV0MigrationTransaction({
+    v0Notes: discovery.v0Notes,
+    targetV1Pkh: params.targetV1Pkh,
+    feePerWord: params.feePerWord,
+    includeLockData: params.includeLockData,
+  });
+
+  return {
+    ...built,
+    discovery,
+  };
+}
+
 export type {
+  BuildV0MigrationFromMnemonicParams,
+  BuildV0MigrationFromMnemonicResult,
   BuildV0MigrationTransactionParams,
   BuildV0MigrationTransactionResult,
+  DeriveV0AddressParams,
+  DerivedV0Address,
   QueryV0BalanceParams,
+  QueryV0BalanceFromMnemonicParams,
+  QueryV0BalanceFromMnemonicResult,
   QueryV0BalanceResult,
 } from './migration-types.js';

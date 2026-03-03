@@ -1,17 +1,13 @@
 import type {
-  BuildV0MigrationFromMnemonicParams,
   BuildV0MigrationFromMnemonicResult,
-  BuildV0MigrationTransactionParams,
   BuildV0MigrationTransactionResult,
-  DeriveV0AddressParams,
   DerivedV0Address,
-  QueryV0BalanceParams,
-  QueryV0BalanceFromMnemonicParams,
   QueryV0BalanceFromMnemonicResult,
   QueryV0BalanceResult,
 } from './migration-types.js';
 import type {
   Note,
+  Nicks,
   NoteV0,
   PbCom2BalanceEntry,
   RawTxV1,
@@ -34,10 +30,6 @@ function isNoteV0(note: Note): note is NoteV0 {
   return 'inner' in note && 'sig' in note && 'source' in note;
 }
 
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-}
-
 function sumNicks(notes: NoteV0[]): string {
   const total = notes.reduce((acc, note) => acc + BigInt(note.assets), 0n);
   return total.toString();
@@ -47,17 +39,18 @@ function sumNicks(notes: NoteV0[]): string {
  * Derive legacy v0 address metadata from mnemonic.
  *
  * v0 discovery queries use the base58-encoded bare public key ("sourceAddress").
- * We also expose the hashed PKH digest for callers that need lock condition metadata.
  */
-export function deriveV0AddressFromMnemonic(params: DeriveV0AddressParams): DerivedV0Address {
-  const master = wasm.deriveMasterKeyFromMnemonic(params.mnemonic, params.passphrase ?? '');
-  const key = params.childIndex === undefined ? master : master.deriveChild(params.childIndex);
+export function deriveV0AddressFromMnemonic(
+  mnemonic: string,
+  passphrase?: string,
+  childIndex?: number
+): DerivedV0Address {
+  const master = wasm.deriveMasterKeyFromMnemonic(mnemonic, passphrase ?? '');
+  const key = childIndex === undefined ? master : master.deriveChild(childIndex);
   const publicKey = Uint8Array.from(key.publicKey);
 
   return {
     sourceAddress: base58.encode(publicKey),
-    sourcePkh: wasm.hashPublicKey(publicKey),
-    publicKeyHex: toHex(publicKey),
   };
 }
 
@@ -66,15 +59,15 @@ export function deriveV0AddressFromMnemonic(params: DeriveV0AddressParams): Deri
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  */
 export async function queryV0BalanceForAddress(
-  params: QueryV0BalanceParams
+  grpcEndpoint: string,
+  address: string
 ): Promise<QueryV0BalanceResult> {
-  const sourceAddress = params.sourceAddress ?? params.sourcePkh;
-  if (!sourceAddress) {
-    throw new Error('sourceAddress is required');
+  if (!address) {
+    throw new Error('address is required');
   }
 
-  const grpcClient = new wasm.GrpcClient(params.grpcEndpoint);
-  const balance = await grpcClient.getBalanceByAddress(sourceAddress);
+  const grpcClient = new wasm.GrpcClient(grpcEndpoint);
+  const balance = await grpcClient.getBalanceByAddress(address);
 
   const v0Notes: NoteV0[] = [];
   const entries = balance.notes ?? [];
@@ -96,26 +89,16 @@ export async function queryV0BalanceForAddress(
 }
 
 /**
- * Back-compat alias kept for older callers.
- * Despite the name, this resolves to address-based lookup via getBalanceByAddress.
- */
-export async function queryV0BalanceForPkh(
-  params: QueryV0BalanceParams
-): Promise<QueryV0BalanceResult> {
-  return queryV0BalanceForAddress(params);
-}
-
-/**
  * Derive v0 discovery address from mnemonic and query legacy notes in one step.
  */
 export async function queryV0BalanceFromMnemonic(
-  params: QueryV0BalanceFromMnemonicParams
+  mnemonic: string,
+  grpcEndpoint: string,
+  passphrase?: string,
+  childIndex?: number
 ): Promise<QueryV0BalanceFromMnemonicResult> {
-  const derived = deriveV0AddressFromMnemonic(params);
-  const queried = await queryV0BalanceForAddress({
-    grpcEndpoint: params.grpcEndpoint,
-    sourceAddress: derived.sourceAddress,
-  });
+  const derived = deriveV0AddressFromMnemonic(mnemonic, passphrase, childIndex);
+  const queried = await queryV0BalanceForAddress(grpcEndpoint, derived.sourceAddress);
 
   return {
     ...derived,
@@ -123,38 +106,46 @@ export async function queryV0BalanceFromMnemonic(
   };
 }
 
+const DEFAULT_TX_ENGINE_SETTINGS: TxEngineSettings = {
+  tx_engine_version: 1,
+  tx_engine_patch: 0,
+  min_fee: '256',
+  cost_per_word: '32768',
+  witness_word_div: 1,
+};
+
 /**
  * Build a transaction that migrates v0 notes into a v1 PKH lock.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  */
 export async function buildV0MigrationTransaction(
-  params: BuildV0MigrationTransactionParams
+  v0Notes: NoteV0[],
+  targetV1Pkh: string,
+  feePerWord?: Nicks,
+  includeLockData?: boolean,
+  settings?: Partial<TxEngineSettings>
 ): Promise<BuildV0MigrationTransactionResult> {
-  if (!params.v0Notes.length) {
+  if (!v0Notes.length) {
     throw new Error('No v0 notes provided for migration');
   }
 
-  const includeLockData = !!params.includeLockData;
-  const costPerWord = params.feePerWord ?? '32768';
-
-  const targetSpendCondition = buildSinglePkhSpendCondition(params.targetV1Pkh);
-  const settings: TxEngineSettings = {
-    tx_engine_version: 1,
-    tx_engine_patch: 0,
-    min_fee: '256',
-    cost_per_word: costPerWord,
-    witness_word_div: 1,
+  const includeLockDataVal = !!includeLockData;
+  const txSettings: TxEngineSettings = {
+    ...DEFAULT_TX_ENGINE_SETTINGS,
+    ...settings,
+    cost_per_word: feePerWord ?? settings?.cost_per_word ?? DEFAULT_TX_ENGINE_SETTINGS.cost_per_word,
   };
-  const builder = new wasm.TxBuilder(settings);
+  const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
+  const builder = new wasm.TxBuilder(txSettings);
 
-  for (const note of params.v0Notes) {
+  for (const note of v0Notes) {
     const spendBuilder = new wasm.SpendBuilder(note, null, targetSpendCondition);
     // Use refund path to migrate full note value into target lock.
-    spendBuilder.computeRefund(includeLockData);
+    spendBuilder.computeRefund(includeLockDataVal);
     builder.spend(spendBuilder);
   }
 
-  builder.recalcAndSetFee(includeLockData);
+  builder.recalcAndSetFee(includeLockDataVal);
   const feeResult = builder.calcFee();
   const transaction = builder.build();
   const txNotes = builder.allNotes() as TxNotes;
@@ -178,18 +169,26 @@ export async function buildV0MigrationTransaction(
 }
 
 /**
- * Derive v0 address, query legacy notes, and build migration transaction.
+ * Derive v0 address, query legacy notes, and build migration transaction in one step.
  */
 export async function buildV0MigrationFromMnemonic(
-  params: BuildV0MigrationFromMnemonicParams
+  mnemonic: string,
+  grpcEndpoint: string,
+  targetV1Pkh: string,
+  passphrase?: string,
+  childIndex?: number,
+  feePerWord?: Nicks,
+  includeLockData?: boolean,
+  settings?: Partial<TxEngineSettings>
 ): Promise<BuildV0MigrationFromMnemonicResult> {
-  const discovery = await queryV0BalanceFromMnemonic(params);
-  const built = await buildV0MigrationTransaction({
-    v0Notes: discovery.v0Notes,
-    targetV1Pkh: params.targetV1Pkh,
-    feePerWord: params.feePerWord,
-    includeLockData: params.includeLockData,
-  });
+  const discovery = await queryV0BalanceFromMnemonic(mnemonic, grpcEndpoint, passphrase, childIndex);
+  const built = await buildV0MigrationTransaction(
+    discovery.v0Notes,
+    targetV1Pkh,
+    feePerWord,
+    includeLockData,
+    settings
+  );
 
   return {
     ...built,
@@ -198,14 +197,9 @@ export async function buildV0MigrationFromMnemonic(
 }
 
 export type {
-  BuildV0MigrationFromMnemonicParams,
   BuildV0MigrationFromMnemonicResult,
-  BuildV0MigrationTransactionParams,
   BuildV0MigrationTransactionResult,
-  DeriveV0AddressParams,
   DerivedV0Address,
-  QueryV0BalanceParams,
-  QueryV0BalanceFromMnemonicParams,
   QueryV0BalanceFromMnemonicResult,
   QueryV0BalanceResult,
 } from './migration-types.js';

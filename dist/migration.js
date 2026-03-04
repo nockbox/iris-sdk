@@ -14,6 +14,12 @@ function sumNicks(notes) {
     return total.toString();
 }
 const NOCK_TO_NICKS = 65536;
+function normalizeGrpcEndpoint(endpoint) {
+    const trimmed = endpoint?.trim() || '';
+    if (!trimmed)
+        return trimmed;
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
 /**
  * Derive legacy v0 address metadata from mnemonic.
  *
@@ -21,12 +27,21 @@ const NOCK_TO_NICKS = 65536;
  */
 export function deriveV0AddressFromMnemonic(mnemonic, passphrase, childIndex) {
     const master = wasm.deriveMasterKeyFromMnemonic(mnemonic, passphrase ?? '');
-    const key = childIndex === undefined ? master : master.deriveChild(childIndex);
-    const publicKey = Uint8Array.from(key.publicKey);
-    const sourceAddress = base58.encode(publicKey);
-    return {
-        sourceAddress,
-    };
+    try {
+        const key = childIndex === undefined ? master : master.deriveChild(childIndex);
+        try {
+            const publicKey = Uint8Array.from(key.publicKey);
+            const sourceAddress = base58.encode(publicKey);
+            return { sourceAddress };
+        }
+        finally {
+            if (key !== master)
+                key.free();
+        }
+    }
+    finally {
+        master.free();
+    }
 }
 /**
  * Query address balance and return only v0 (Legacy) notes.
@@ -36,7 +51,8 @@ export async function queryV0BalanceForAddress(grpcEndpoint, address) {
     if (!address) {
         throw new Error('address is required');
     }
-    const grpcClient = new wasm.GrpcClient(grpcEndpoint);
+    const normalizedEndpoint = normalizeGrpcEndpoint(grpcEndpoint);
+    const grpcClient = new wasm.GrpcClient(normalizedEndpoint);
     const balance = await grpcClient.getBalanceByAddress(address);
     const v0Notes = [];
     const entries = balance.notes ?? [];
@@ -57,14 +73,23 @@ export async function queryV0BalanceForAddress(grpcEndpoint, address) {
 }
 /**
  * Derive v0 discovery address from mnemonic and query legacy notes in one step.
+ * Tries master key first; if no Legacy notes found, retries with child index 0
+ * (some v0 wallets used child derivation).
  */
 export async function queryV0BalanceFromMnemonic(mnemonic, grpcEndpoint, passphrase, childIndex) {
     const derived = deriveV0AddressFromMnemonic(mnemonic, passphrase, childIndex);
     const queried = await queryV0BalanceForAddress(grpcEndpoint, derived.sourceAddress);
-    return {
-        ...derived,
-        ...queried,
-    };
+    if (queried.v0Notes.length > 0) {
+        return { ...derived, ...queried };
+    }
+    if (childIndex === undefined) {
+        const derivedChild0 = deriveV0AddressFromMnemonic(mnemonic, passphrase, 0);
+        const queriedChild0 = await queryV0BalanceForAddress(grpcEndpoint, derivedChild0.sourceAddress);
+        if (queriedChild0.v0Notes.length > 0) {
+            return { ...derivedChild0, ...queriedChild0 };
+        }
+    }
+    return { ...derived, ...queried };
 }
 /** Patch 1 (Bythos) - fee auto-calculated via recalcAndSetFee */
 const DEFAULT_TX_ENGINE_SETTINGS = {

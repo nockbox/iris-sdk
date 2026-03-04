@@ -13,6 +13,8 @@ export declare function deriveV0AddressFromMnemonic(mnemonic: string, passphrase
 export declare function queryV0BalanceForAddress(grpcEndpoint: string, address: string): Promise<QueryV0BalanceResult>;
 /**
  * Derive v0 discovery address from mnemonic and query legacy notes in one step.
+ * Tries master key first; if no Legacy notes found, retries with child index 0
+ * (some v0 wallets used child derivation).
  */
 export declare function queryV0BalanceFromMnemonic(mnemonic: string, grpcEndpoint: string, passphrase?: string, childIndex?: number): Promise<QueryV0BalanceFromMnemonicResult>;
 /**

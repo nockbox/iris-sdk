@@ -176,11 +176,15 @@ export class NockchainProvider {
    * });
    * ```
    */
-  async signRawTx(params: SignRawTxParams | {
-    rawTx: unknown;
-    notes: unknown[];
-    spendConditions: unknown[];
-  }): Promise<Uint8Array> {
+  async signRawTx(
+    params:
+      | SignRawTxParams
+      | {
+          rawTx: unknown;
+          notes: unknown[];
+          spendConditions: unknown[];
+        }
+  ): Promise<Uint8Array> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }

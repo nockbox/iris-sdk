@@ -96,7 +96,11 @@ export function parseNicksLike(value: NicksLike, field: 'amount' | 'fee'): strin
 }
 
 function toProtobufIfNeeded(v: unknown): unknown {
-  if (v && typeof v === 'object' && typeof (v as { toProtobuf?: () => unknown }).toProtobuf === 'function') {
+  if (
+    v &&
+    typeof v === 'object' &&
+    typeof (v as { toProtobuf?: () => unknown }).toProtobuf === 'function'
+  ) {
     return (v as { toProtobuf: () => unknown }).toProtobuf();
   }
   return v;
@@ -114,7 +118,12 @@ export function normalizeSignRawTxParams(params: {
   const notes = params.notes.map(toProtobufIfNeeded);
   const spendConditions = params.spendConditions.map(toProtobufIfNeeded);
 
-  if (!Array.isArray(notes) || notes.length === 0 || !Array.isArray(spendConditions) || spendConditions.length === 0) {
+  if (
+    !Array.isArray(notes) ||
+    notes.length === 0 ||
+    !Array.isArray(spendConditions) ||
+    spendConditions.length === 0
+  ) {
     throw new Error('Invalid signRawTx params: notes and spendConditions must be non-empty arrays');
   }
 
@@ -136,4 +145,3 @@ export function normalizeSignRawTxParams(params: {
 
   return { rawTx, notes, spendConditions } as SignRawTxParams;
 }
-

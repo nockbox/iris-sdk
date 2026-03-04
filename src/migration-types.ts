@@ -43,6 +43,15 @@ export interface BuildV0MigrationTransactionResult {
   };
 }
 
+/** Result of single-note migration (matches extension logic). */
+export interface BuildV0MigrationSingleNoteResult extends BuildV0MigrationTransactionResult {
+  migratedNicks: Nicks;
+  migratedNock: number;
+  selectedNoteNicks: Nicks;
+  selectedNoteNock: number;
+  feeNock: number;
+}
+
 /** Result of mnemonic-based migration build. */
 export interface BuildV0MigrationFromMnemonicResult
   extends BuildV0MigrationTransactionResult {

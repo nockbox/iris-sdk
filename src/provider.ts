@@ -6,7 +6,11 @@ import type { Transaction, NockchainEvent, EventListener, InjectedNockchain } fr
 import { TransactionBuilder } from './transaction.js';
 import { WalletNotInstalledError, UserRejectedError, RpcError, NoAccountError } from './errors.js';
 import { PROVIDER_METHODS } from './constants.js';
-import { normalizeTransaction } from './compat.js';
+import {
+  normalizeSignRawTxParams,
+  normalizeSendTransaction,
+  type SignRawTxParams,
+} from './compat.js';
 
 /**
  * NockchainProvider class - Main interface for dApps to interact with Iris wallet
@@ -116,7 +120,7 @@ export class NockchainProvider {
       throw new NoAccountError();
     }
 
-    const normalizedTx = normalizeTransaction(transaction);
+    const normalizedTx = normalizeSendTransaction(transaction);
 
     return this.request<string>({
       method: PROVIDER_METHODS.SEND_TRANSACTION,
@@ -145,7 +149,7 @@ export class NockchainProvider {
 
   /**
    * Sign a raw transaction
-   * Accepts either wasm objects (with toProtobuf() method) or protobuf JS objects
+   * Accepts native (RawTx, Note[], SpendCondition[]) or protobuf (PbCom2*) format.
    * @param params - The transaction parameters (rawTx, notes, spendConditions)
    * @returns Promise resolving to the signed raw transaction as protobuf Uint8Array
    * @throws {NoAccountError} If no account is connected
@@ -154,53 +158,38 @@ export class NockchainProvider {
    *
    * @example
    * ```typescript
-   * // Option 1: Pass wasm objects directly (auto-converts to protobuf)
-   * const rawTx = builder.build();
+   * // Option 1: Pass native WASM types (preferred)
+   * const rawTx = wasm.nockchainTxToRaw(builder.build());
    * const txNotes = builder.allNotes();
    *
    * const signedTx = await provider.signRawTx({
-   *   rawTx: rawTx,  // wasm RawTx object
-   *   notes: txNotes.notes,  // array of wasm Note objects
-   *   spendConditions: txNotes.spendConditions  // array of wasm SpendCondition objects
+   *   rawTx,
+   *   notes: txNotes.notes,
+   *   spendConditions: txNotes.spend_conditions,
    * });
    *
-   * // Option 2: Pass protobuf JS objects directly
+   * // Option 2: Pass protobuf JS objects
    * const signedTx = await provider.signRawTx({
-   *   rawTx: rawTxProtobufObject,  // protobuf JS object
-   *   notes: noteProtobufObjects,  // array of protobuf JS objects
-   *   spendConditions: spendCondProtobufObjects  // array of protobuf JS objects
+   *   rawTx: rawTxProtobufObject,
+   *   notes: noteProtobufObjects,
+   *   spendConditions: spendCondProtobufObjects,
    * });
    * ```
    */
-  async signRawTx(params: {
-    rawTx: any;
-    notes: any[];
-    spendConditions: any[];
+  async signRawTx(params: SignRawTxParams | {
+    rawTx: unknown;
+    notes: unknown[];
+    spendConditions: unknown[];
   }): Promise<Uint8Array> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }
 
-    // Helper to convert to protobuf if it's a wasm object
-    const toProtobuf = (obj: any): any => {
-      // If object has toProtobuf method, it's a wasm object - convert it
-      if (obj && typeof obj.toProtobuf === 'function') {
-        return obj.toProtobuf();
-      }
-      // Otherwise assume it's already a protobuf JS object
-      return obj;
-    };
-
-    // Convert wasm objects to protobuf (if needed)
-    const protobufParams = {
-      rawTx: toProtobuf(params.rawTx),
-      notes: params.notes.map(toProtobuf),
-      spendConditions: params.spendConditions.map(toProtobuf),
-    };
+    const validatedParams = normalizeSignRawTxParams(params);
 
     return this.request<Uint8Array>({
       method: PROVIDER_METHODS.SIGN_RAW_TX,
-      params: [protobufParams],
+      params: [validatedParams],
     });
   }
 

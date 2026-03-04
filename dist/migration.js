@@ -115,14 +115,18 @@ export async function buildV0MigrationTransaction(v0Notes, targetV1Pkh, feePerWo
         id: transaction.id,
         spends: transaction.spends,
     };
+    const inputNotes = txNotes.notes.filter((note) => isNoteV0(note));
+    const spendConditions = txNotes.spend_conditions.length === inputNotes.length
+        ? txNotes.spend_conditions
+        : inputNotes.map(() => targetSpendCondition);
     const result = {
         transaction,
         txId,
         fee: feeResult,
         signRawTxPayload: {
             rawTx,
-            notes: txNotes.notes.filter((note) => isNoteV0(note)),
-            spendConditions: txNotes.spend_conditions,
+            notes: inputNotes,
+            spendConditions,
         },
     };
     if (debug) {
@@ -164,6 +168,10 @@ async function buildV0MigrationTransactionSingleNote(v0Notes, targetV1Pkh, feePe
         spends: transaction.spends,
     };
     const feeNicksBigInt = BigInt(feeNicks);
+    const inputNotes = txNotes.notes.filter((note) => isNoteV0(note));
+    const spendConditions = txNotes.spend_conditions.length === inputNotes.length
+        ? txNotes.spend_conditions
+        : inputNotes.map(() => targetSpendCondition);
     const result = {
         transaction,
         txId: transaction.id,
@@ -175,8 +183,8 @@ async function buildV0MigrationTransactionSingleNote(v0Notes, targetV1Pkh, feePe
         feeNock: Number(feeNicksBigInt) / NOCK_TO_NICKS,
         signRawTxPayload: {
             rawTx,
-            notes: txNotes.notes.filter((note) => isNoteV0(note)),
-            spendConditions: txNotes.spend_conditions,
+            notes: inputNotes,
+            spendConditions,
         },
     };
     if (debug) {

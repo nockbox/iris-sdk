@@ -67,9 +67,11 @@ signRawTxBtn.onclick = async () => {
     log('Creating gRPC client for: ' + grpcEndpoint);
     const grpcClient = new wasm.GrpcClient(grpcEndpoint);
 
-    // 3. Query notes by address (0.2 API)
-    log('Querying notes from gRPC...');
-    const balance = await grpcClient.getBalanceByAddress(walletPkh);
+    // 3. Derive first-name from PKH and query notes (notes are indexed by first-name, not address)
+    const spendCondition = [{ Pkh: { m: 1, hashes: [walletPkh] } }] as wasm.SpendCondition;
+    const firstName = wasm.spendConditionFirstName(spendCondition);
+    log('Querying notes by first-name...');
+    const balance = await grpcClient.getBalanceByFirstName(firstName);
 
     if (!balance || !balance.notes || balance.notes.length === 0) {
       log('No notes found - wallet might be empty');
@@ -106,9 +108,6 @@ signRawTxBtn.onclick = async () => {
       witness_word_div: 1,
     });
 
-    // 0.2 spend condition type: LockPrimitive[]
-    const spendCondition = [{ Pkh: { m: 1, hashes: [walletPkh] } }];
-
     // Use simpleSpend (no lockData for lower fees), digest values are strings in 0.2
     builder.simpleSpend(
       [note],
@@ -132,24 +131,25 @@ signRawTxBtn.onclick = async () => {
     log('Notes count: ' + txNotes.notes.length);
     log('Spend conditions count: ' + txNotes.spend_conditions.length);
 
-    // 0.2 raw tx is plain data
-    const rawTx = {
-      version: 1 as const,
-      id: nockchainTx.id,
-      spends: nockchainTx.spends,
-    };
+    // 6. Convert to protobuf (API boundary requires protobuf)
+    const rawTx = wasm.nockchainTxToRaw(nockchainTx) as wasm.RawTxV1;
+    const rawTxProto = wasm.rawTxToProtobuf(rawTx);
+    const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.note_to_protobuf(n));
+    const spendCondProto = txNotes.spend_conditions.map((sc: wasm.SpendCondition) =>
+      wasm.spendConditionToProtobuf(sc)
+    );
 
-    // 6. Sign using provider.signRawTx
+    // 7. Sign using provider.signRawTx
     log('Signing transaction...');
     const signedTxProtobuf = await provider.signRawTx({
-      rawTx,
-      notes: txNotes.notes,
-      spendConditions: txNotes.spend_conditions,
+      rawTx: rawTxProto,
+      notes: notesProto,
+      spendConditions: spendCondProto,
     });
 
     log('Transaction signed successfully!');
 
-    // 7. Convert signed tx to Jam and download
+    // 8. Convert signed tx to Jam and download
     const signedTxProto =
       typeof signedTxProtobuf === 'object' && !(signedTxProtobuf instanceof Uint8Array)
         ? signedTxProtobuf

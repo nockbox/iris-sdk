@@ -1595,11 +1595,14 @@ signTxBtn.onclick = async () => {
     const rawTx = wasm.nockchainTxToRaw(state.nockchainTx) as wasm.RawTxV1;
     const rawTxProto = wasm.rawTxToProtobuf(rawTx);
     const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.note_to_protobuf(n));
+    const spendCondProto = txNotes.spend_conditions.map((sc: wasm.SpendCondition) =>
+      wasm.spendConditionToProtobuf(sc)
+    );
 
     const signedTxProtobuf = await state.provider.signRawTx({
       rawTx: rawTxProto,
       notes: notesProto,
-      spendConditions: txNotes.spend_conditions,
+      spendConditions: spendCondProto,
     });
 
     const signedTxProtoObj =

@@ -343,7 +343,7 @@ async function refreshNotesForLock(lockId: string) {
       .map((entry: wasm.PbCom2BalanceEntry) => entry.note)
       .filter((note): note is wasm.PbCom2Note => note != null)
       .map((noteProto: wasm.PbCom2Note) => {
-        const note = wasm.note_from_protobuf(noteProto);
+        const note = wasm.noteFromProtobuf(noteProto);
         const assets = note.assets != null ? String(note.assets) : '0';
         const firstNameStr = note.name?.first ?? '';
         const lastNameStr = note.name?.last ?? '';
@@ -683,7 +683,7 @@ function updateBuilder() {
             lock_root: { Lock: seedLock.spendCondition },
             note_data: [],
             gift: seed.amount,
-            parent_hash: wasm.note_hash(spend.input.note.note),
+            parent_hash: wasm.noteHash(spend.input.note.note),
           };
           spendBuilder.seed(seedV1);
         }
@@ -954,8 +954,8 @@ function renderTransaction() {
       </div>
     `;
 
-    // Outputs: 0.2 use nockchainTxToRaw + rawTxOutputs (maybe doesn't work)
-    const rawTx = wasm.nockchainTxToRaw(state.nockchainTx);
+    // Outputs: 0.2 use nockchainTxToRawTx + rawTxOutputs (maybe doesn't work)
+    const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx);
     const outputs = wasm.rawTxOutputs(rawTx);
     if (outputs && outputs.length > 0) {
       outputsList.innerHTML = outputs
@@ -1566,7 +1566,7 @@ downloadTxBtn.onclick = () => {
   if (!state.nockchainTx) return;
 
   try {
-    const rawTx = wasm.nockchainTxToRaw(state.nockchainTx);
+    const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx);
     const jamBytes = wasm.jam(rawTx as unknown as wasm.Noun);
     const txId = state.nockchainTx.id;
 
@@ -1592,9 +1592,9 @@ signTxBtn.onclick = async () => {
 
   try {
     const txNotes = state.builder.allNotes();
-    const rawTx = wasm.nockchainTxToRaw(state.nockchainTx) as wasm.RawTxV1;
+    const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx) as wasm.RawTxV1;
     const rawTxProto = wasm.rawTxToProtobuf(rawTx);
-    const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.note_to_protobuf(n));
+    const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.noteToProtobuf(n));
     const spendCondProto = txNotes.spend_conditions.map((sc: wasm.SpendCondition) =>
       wasm.spendConditionToProtobuf(sc)
     );
@@ -1610,7 +1610,7 @@ signTxBtn.onclick = async () => {
         ? signedTxProtobuf
         : (signedTxProtobuf as unknown as wasm.PbCom2RawTransaction);
     const signedRawTx = wasm.rawTxFromProtobuf(signedTxProtoObj) as wasm.RawTxV1;
-    state.signedTx = wasm.rawTxToNockchainTx(signedRawTx);
+    state.signedTx = wasm.rawTxV1ToNockchainTx(signedRawTx);
 
     let isValid = true;
     let validationError = '';
@@ -1675,7 +1675,7 @@ document.getElementById('downloadSignedTxBtn')!.onclick = () => {
   if (!state.signedTx || !state.signedTxId) return;
 
   try {
-    const rawTx = wasm.nockchainTxToRaw(state.signedTx);
+    const rawTx = wasm.nockchainTxToRawTx(state.signedTx);
     const jamBytes = wasm.jam(rawTx as unknown as wasm.Noun);
     const blob = new Blob([new Uint8Array(jamBytes)], { type: 'application/jam' });
     const url = URL.createObjectURL(blob);
@@ -1687,7 +1687,7 @@ document.getElementById('downloadSignedTxBtn')!.onclick = () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    const rawTxForJam = wasm.nockchainTxToRaw(state.signedTx);
+    const rawTxForJam = wasm.nockchainTxToRawTx(state.signedTx);
     const rawTxBytes = wasm.jam(rawTxForJam as unknown as wasm.Noun);
     const blobRaw = new Blob([new Uint8Array(rawTxBytes)], { type: 'application/jam' });
     const urlRaw = URL.createObjectURL(blobRaw);
@@ -1710,7 +1710,7 @@ document.getElementById('submitSignedTxBtn')!.onclick = async () => {
   try {
     if (!state.grpcClient) throw new Error('gRPC client not initialized');
 
-    const rawTx = wasm.nockchainTxToRaw(state.signedTx) as wasm.RawTxV1;
+    const rawTx = wasm.nockchainTxToRawTx(state.signedTx) as wasm.RawTxV1;
     const txProtobuf = wasm.rawTxToProtobuf(rawTx);
     await state.grpcClient.sendTransaction(txProtobuf);
 

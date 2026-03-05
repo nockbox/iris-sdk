@@ -84,7 +84,7 @@ signRawTxBtn.onclick = async () => {
     const notes = balance.notes
       .map((entry: any) => entry.note)
       .filter(Boolean)
-      .map((noteProto: any) => wasm.note_from_protobuf(noteProto));
+      .map((noteProto: any) => wasm.noteFromProtobuf(noteProto));
 
     if (!notes.length) {
       log('No parseable notes found');
@@ -132,9 +132,9 @@ signRawTxBtn.onclick = async () => {
     log('Spend conditions count: ' + txNotes.spend_conditions.length);
 
     // 6. Convert to protobuf (API boundary requires protobuf)
-    const rawTx = wasm.nockchainTxToRaw(nockchainTx) as wasm.RawTxV1;
+    const rawTx = wasm.nockchainTxToRawTx(nockchainTx);
     const rawTxProto = wasm.rawTxToProtobuf(rawTx);
-    const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.note_to_protobuf(n));
+    const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.noteToProtobuf(n));
     const spendCondProto = txNotes.spend_conditions.map((sc: wasm.SpendCondition) =>
       wasm.spendConditionToProtobuf(sc)
     );

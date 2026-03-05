@@ -149,8 +149,8 @@ export class NockchainProvider {
 
   /**
    * Sign a raw transaction
-   * Accepts native (RawTx, Note[], SpendCondition[]) or protobuf (PbCom2*) format.
-   * @param params - The transaction parameters (rawTx, notes, spendConditions)
+   * Input must be protobuf (PbCom2RawTransaction, PbCom2Note[], PbCom2SpendCondition[]).
+   * @param params - The transaction parameters in protobuf format
    * @returns Promise resolving to the signed raw transaction as protobuf Uint8Array
    * @throws {NoAccountError} If no account is connected
    * @throws {UserRejectedError} If the user rejects the signing request
@@ -158,33 +158,18 @@ export class NockchainProvider {
    *
    * @example
    * ```typescript
-   * // Option 1: Pass native WASM types (preferred)
-   * const rawTx = wasm.nockchainTxToRaw(builder.build());
-   * const txNotes = builder.allNotes();
+   * const rawTxProto = wasm.rawTxToProtobuf(rawTx);
+   * const notesProto = notes.map(n => wasm.note_to_protobuf(n));
+   * const spendCondProto = spendConditions.map(sc => wasm.spendConditionToProtobuf(sc));
    *
    * const signedTx = await provider.signRawTx({
-   *   rawTx,
-   *   notes: txNotes.notes,
-   *   spendConditions: txNotes.spend_conditions,
-   * });
-   *
-   * // Option 2: Pass protobuf JS objects
-   * const signedTx = await provider.signRawTx({
-   *   rawTx: rawTxProtobufObject,
-   *   notes: noteProtobufObjects,
-   *   spendConditions: spendCondProtobufObjects,
+   *   rawTx: rawTxProto,
+   *   notes: notesProto,
+   *   spendConditions: spendCondProto,
    * });
    * ```
    */
-  async signRawTx(
-    params:
-      | SignRawTxParams
-      | {
-          rawTx: unknown;
-          notes: unknown[];
-          spendConditions: unknown[];
-        }
-  ): Promise<Uint8Array> {
+  async signRawTx(params: SignRawTxParams): Promise<Uint8Array> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }

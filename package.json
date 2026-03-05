@@ -13,6 +13,10 @@
     "./wasm": {
       "types": "./dist/wasm.d.ts",
       "import": "./dist/wasm.js"
+    },
+    "./iris_wasm.guard": {
+      "types": "./dist/iris_wasm.guard.d.ts",
+      "import": "./dist/iris_wasm.guard.js"
     }
   },
   "files": [

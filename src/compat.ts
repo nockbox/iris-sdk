@@ -11,7 +11,7 @@ import type {
   Note,
   SpendCondition,
 } from '@nockbox/iris-wasm/iris_wasm.js';
-import * as guard from '@nockbox/iris-wasm/iris_wasm.guard';
+import * as guard from './iris_wasm.guard.js';
 
 /** Simple send payload: to, amount, fee as nicks strings (for sendTransaction). */
 export interface CanonicalSendPayload {
@@ -34,23 +34,30 @@ export function normalizeSendTransaction(transaction: Transaction): CanonicalSen
   };
 }
 
-/** Protobuf signRawTx payload (gRPC wire format). */
+/** Protobuf signRawTx payload (gRPC wire format). Only format supported at API boundary. */
 export interface LegacySignRawTxRequest {
+  /** Raw transaction protobuf */
   rawTx: PbCom2RawTransaction;
+  /** Input notes (protobuf) */
   notes: PbCom2Note[];
+  /** Spend conditions (protobuf) */
   spendConditions: PbCom2SpendCondition[];
 }
 
-/** Native signRawTx payload. */
-export interface SignRawTxRequest {
+/** Params for signRawTx. Protobuf only for now (native RawTx not supported at RPC boundary. */
+export type SignRawTxParams = LegacySignRawTxRequest;
+
+/** Native signRawTx payload (RawTx, Note[], SpendCondition[]). Used internally after protobuf conversion. */
+export interface NativeSignRawTxRequest {
+  /** Raw transaction (native) */
   rawTx: RawTx;
+  /** Input notes (native) */
   notes: Note[];
+  /** Spend conditions (native) */
   spendConditions: SpendCondition[];
 }
 
-/** SignRawTx params: native or protobuf. */
-export type SignRawTxParams = SignRawTxRequest | LegacySignRawTxRequest;
-
+/** Type guard: validates protobuf signRawTx payload. Use at API boundary (SDK + extension). */
 export function isLegacySignRawTxRequest(obj: unknown): obj is LegacySignRawTxRequest {
   if (!obj || typeof obj !== 'object') return false;
   const p = obj as { rawTx?: unknown; notes?: unknown; spendConditions?: unknown };
@@ -62,6 +69,21 @@ export function isLegacySignRawTxRequest(obj: unknown): obj is LegacySignRawTxRe
     Array.isArray(p.spendConditions) &&
     p.spendConditions.length > 0 &&
     p.spendConditions.every((sc: unknown) => guard.isPbCom2SpendCondition(sc))
+  );
+}
+
+/** Type guard: validates native signRawTx payload. Use internally after protobuf→native conversion. */
+export function isNativeSignRawTxPayload(obj: unknown): obj is NativeSignRawTxRequest {
+  if (!obj || typeof obj !== 'object') return false;
+  const p = obj as { rawTx?: unknown; notes?: unknown; spendConditions?: unknown };
+  return (
+    guard.isRawTx(p.rawTx) &&
+    Array.isArray(p.notes) &&
+    p.notes.length > 0 &&
+    p.notes.every((n: unknown) => guard.isNote(n)) &&
+    Array.isArray(p.spendConditions) &&
+    p.spendConditions.length > 0 &&
+    p.spendConditions.every((sc: unknown) => guard.isSpendCondition(sc))
   );
 }
 
@@ -95,53 +117,15 @@ export function parseNicksLike(value: NicksLike, field: 'amount' | 'fee'): strin
   throw new Error(`Invalid ${field}: unsupported value type`);
 }
 
-function toProtobufIfNeeded(v: unknown): unknown {
-  if (
-    v &&
-    typeof v === 'object' &&
-    typeof (v as { toProtobuf?: () => unknown }).toProtobuf === 'function'
-  ) {
-    return (v as { toProtobuf: () => unknown }).toProtobuf();
-  }
-  return v;
-}
-
 /**
- * Validate signRawTx params. Accepts all-native or all-protobuf (no mixing).
+ * Validate signRawTx params. Input must be protobuf (LegacySignRawTxRequest).
+ * RPC sends only LegacySignRawTxRequest. Native (SignRawTxRequest) not supported.
  */
-export function normalizeSignRawTxParams(params: {
-  rawTx: unknown;
-  notes: unknown[];
-  spendConditions: unknown[];
-}): SignRawTxParams {
-  const rawTx = toProtobufIfNeeded(params.rawTx);
-  const notes = params.notes.map(toProtobufIfNeeded);
-  const spendConditions = params.spendConditions.map(toProtobufIfNeeded);
-
-  if (
-    !Array.isArray(notes) ||
-    notes.length === 0 ||
-    !Array.isArray(spendConditions) ||
-    spendConditions.length === 0
-  ) {
-    throw new Error('Invalid signRawTx params: notes and spendConditions must be non-empty arrays');
-  }
-
-  const rawTxNative = guard.isRawTx(rawTx);
-  const rawTxProtobuf = guard.isPbCom2RawTransaction(rawTx);
-  const allNotesNative = notes.every(n => guard.isNote(n));
-  const allNotesProtobuf = notes.every(n => guard.isPbCom2Note(n));
-  const allScNative = spendConditions.every(sc => guard.isSpendCondition(sc));
-  const allScProtobuf = spendConditions.every(sc => guard.isPbCom2SpendCondition(sc));
-
-  const validNative = rawTxNative && allNotesNative && allScNative;
-  const validProtobuf = rawTxProtobuf && allNotesProtobuf && allScProtobuf;
-
-  if (!validNative && !validProtobuf) {
+export function normalizeSignRawTxParams(params: SignRawTxParams): SignRawTxParams {
+  if (!isLegacySignRawTxRequest(params)) {
     throw new Error(
-      'Invalid signRawTx params: expected all-native (RawTx, Note[], SpendCondition[]) or all-protobuf (PbCom2*), no mixing'
+      'Invalid signRawTx params: expected protobuf (PbCom2RawTransaction, PbCom2Note[], PbCom2SpendCondition[])'
     );
   }
-
-  return { rawTx, notes, spendConditions } as SignRawTxParams;
+  return params;
 }

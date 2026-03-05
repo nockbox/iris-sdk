@@ -1,6 +1,6 @@
 {
   "name": "@nockbox/iris-sdk",
-  "version": "0.1.1",
+  "version": "0.2.0-alpha.4",
   "description": "TypeScript SDK for interacting with Iris wallet extension",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,6 +9,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./wasm": {
+      "types": "./dist/wasm.d.ts",
+      "import": "./dist/wasm.js"
+    },
+    "./iris_wasm.guard": {
+      "types": "./dist/iris_wasm.guard.d.ts",
+      "import": "./dist/iris_wasm.guard.js"
     }
   },
   "files": [
@@ -46,7 +54,7 @@
     "url": "https://github.com/nockbox/iris-sdk.git"
   },
   "dependencies": {
-    "@scure/base": "^2.0.0",
-    "@nockbox/iris-wasm": "^0.1.1"
+    "@nockbox/iris-wasm": "^0.2.0-alpha.5",
+    "@scure/base": "^2.0.0"
   }
 }

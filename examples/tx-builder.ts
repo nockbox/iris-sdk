@@ -1,17 +1,18 @@
 import { NockchainProvider, wasm } from '../src/index';
 
 // ===== Types =====
+// Note: Nicks are strings in current WASM version, so they need to be cast into integers for arithmetic
 
 interface Lock {
   id: string;
   name: string;
-  spendConditionProtobuf: Uint8Array; // Store protobuf instead of WASM object
+  spendCondition: wasm.SpendCondition; // plain array, e.g. [{ Pkh: { m: 1, hashes: [pkh] } }]
   expanded: boolean;
 }
 
 interface NoteData {
   note: wasm.Note;
-  assets: bigint;
+  assets: wasm.Nicks;
   firstName: string;
   lastName: string;
 }
@@ -24,13 +25,13 @@ interface SelectedInput {
 
 interface Seed {
   lockId: string;
-  amount: bigint; // in nicks
+  amount: wasm.Nicks;
 }
 
 interface Spend {
   inputId: string;
   input: SelectedInput;
-  fee: bigint; // in nicks
+  fee: wasm.Nicks;
   seeds: Seed[];
 }
 
@@ -104,12 +105,12 @@ function truncateAddress(addr: string | undefined): string {
   return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
 }
 
-function nicksToNock(nicks: bigint): number {
-  return Number(nicks) / 65536;
+function nicksToNock(nicks: wasm.Nicks): number {
+  return Number(BigInt(nicks)) / 65536;
 }
 
-function nockToNicks(nock: number): bigint {
-  return BigInt(Math.floor(nock * 65536));
+function nockToNicks(nock: number): wasm.Nicks {
+  return String(BigInt(Math.floor(nock * 65536)));
 }
 
 function formatNock(nock: number): string {
@@ -253,33 +254,32 @@ function createDefaultLocksWithPkh() {
   const coinbaseDefaultExists = state.locks.some(l => l.id === 'coinbase-default');
 
   if (!pkhDefaultExists) {
-    // 1. PKH lock
-    const pkhLock = wasm.Pkh.single(state.walletPkh);
-    const pkhSpendCondition = wasm.SpendCondition.newPkh(pkhLock);
+    // Simple 1-of-1 PKH lock
+    const pkhPrim: wasm.LockPrimitive = { Pkh: { m: 1, hashes: [state.walletPkh] } };
+    const spendCondition: wasm.SpendCondition = [pkhPrim];
     state.locks.push({
       id: 'pkh-default',
       name: 'Wallet PKH',
-      spendConditionProtobuf: pkhSpendCondition.toProtobuf(),
+      spendCondition,
       expanded: false,
     });
-    pkhSpendCondition.free();
   }
 
   if (!coinbaseDefaultExists) {
-    // 2. Coinbase lock (PKH + timelock)
-    const coinbaseLock = wasm.Pkh.single(state.walletPkh);
-    const timelockCoinbase = wasm.LockTim.coinbase();
-    const coinbaseSpendCondition = new wasm.SpendCondition([
-      wasm.LockPrimitive.newPkh(coinbaseLock),
-      wasm.LockPrimitive.newTim(timelockCoinbase),
-    ]);
+    // Coinbase lock (PKH + timelock)
+    const pkhPrim: wasm.LockPrimitive = { Pkh: { m: 1, hashes: [state.walletPkh] } };
+    const coinbaseTim: wasm.LockTim = {
+      rel: { min: 100, max: null },
+      abs: { min: null, max: null },
+    };
+    const timPrim: wasm.LockPrimitive = { Tim: coinbaseTim };
+    const spendCondition: wasm.SpendCondition = [pkhPrim, timPrim];
     state.locks.push({
       id: 'coinbase-default',
       name: 'Wallet Coinbase',
-      spendConditionProtobuf: coinbaseSpendCondition.toProtobuf(),
+      spendCondition,
       expanded: false,
     });
-    coinbaseSpendCondition.free();
   }
 }
 
@@ -327,15 +327,11 @@ async function refreshNotesForLock(lockId: string) {
   if (!lock || !state.grpcClient) return;
 
   try {
-    // Deserialize spend condition from protobuf to get firstName
-    const spendCondition = wasm.SpendCondition.fromProtobuf(lock.spendConditionProtobuf);
-    const firstName = spendCondition.firstName();
-    console.log(
-      `Fetching notes for lock ${lockId}, firstName: ${firstName.value.substring(0, 20)}...`
-    );
+    // 0.2: first name = hash of spend condition (Digest string)
+    const firstName = wasm.spendConditionHash(lock.spendCondition);
+    console.log(`Fetching notes for lock ${lockId}, firstName: ${firstName.substring(0, 20)}...`);
 
-    const balance = await state.grpcClient.getBalanceByFirstName(firstName.value);
-    spendCondition.free(); // Clean up
+    const balance = await state.grpcClient.getBalanceByFirstName(firstName);
 
     if (!balance || !balance.notes || balance.notes.length === 0) {
       state.notes.set(lockId, []);
@@ -343,27 +339,21 @@ async function refreshNotesForLock(lockId: string) {
       return;
     }
 
-    const notes: NoteData[] = (
-      balance.notes as Array<{ note: any; firstName?: string; lastName?: string }>
-    ).map(n => {
-      const note = wasm.Note.fromProtobuf(n.note);
-
-      // Try to extract name from protobuf if top-level fields are empty
-      let firstName = n.firstName || '';
-      let lastName = n.lastName || '';
-
-      if (!firstName && n.note?.note_version?.V1?.name) {
-        firstName = n.note.note_version.V1.name.first || '';
-        lastName = n.note.note_version.V1.name.last || '';
-      }
-
-      return {
-        note,
-        assets: note.assets,
-        firstName,
-        lastName,
-      };
-    });
+    const notes: NoteData[] = balance.notes
+      .map((entry: wasm.PbCom2BalanceEntry) => entry.note)
+      .filter((note): note is wasm.PbCom2Note => note != null)
+      .map((noteProto: wasm.PbCom2Note) => {
+        const note = wasm.noteFromProtobuf(noteProto);
+        const assets = note.assets != null ? String(note.assets) : '0';
+        const firstNameStr = note.name?.first ?? '';
+        const lastNameStr = note.name?.last ?? '';
+        return {
+          note,
+          assets,
+          firstName: firstNameStr,
+          lastName: lastNameStr,
+        };
+      });
 
     state.notes.set(lockId, notes);
     renderNotesForLock(lockId);
@@ -434,7 +424,7 @@ function addInputToSpend(lockId: string, noteIndex: number) {
   const spend: Spend = {
     inputId: input.id,
     input,
-    fee: BigInt(0),
+    fee: '0',
     seeds: [],
   };
 
@@ -507,18 +497,20 @@ function renderSeeds(spend: Spend): string {
 }
 
 function isSpendBalanced(spend: Spend): boolean {
-  const total = spend.fee + spend.seeds.reduce((sum, seed) => sum + seed.amount, BigInt(0));
-  return total === spend.input.note.assets;
+  const total =
+    BigInt(spend.fee) + spend.seeds.reduce((sum, seed) => sum + BigInt(seed.amount), BigInt(0));
+  return total === BigInt(spend.input.note.assets);
 }
 
 function getSpendBalanceText(spend: Spend): string {
-  const total = spend.fee + spend.seeds.reduce((sum, seed) => sum + seed.amount, BigInt(0));
-  const diff = spend.input.note.assets - total;
+  const total =
+    BigInt(spend.fee) + spend.seeds.reduce((sum, seed) => sum + BigInt(seed.amount), BigInt(0));
+  const diff = BigInt(spend.input.note.assets) - total;
   if (diff === BigInt(0)) {
-    return `✓ Balanced (${formatNock(nicksToNock(total))} NOCK)`;
+    return `✓ Balanced (${formatNock(nicksToNock(String(total)))} NOCK)`;
   }
-  const sign = diff > 0 ? '+' : '';
-  return `${sign}${formatNock(nicksToNock(diff))} NOCK`;
+  const sign = diff > 0n ? '+' : '';
+  return `${sign}${formatNock(nicksToNock(String(diff)))} NOCK`;
 }
 
 function removeSpend(inputId: string) {
@@ -544,17 +536,16 @@ function balanceSeed(inputId: string, seedIndex: number) {
   const seed = spend.seeds[seedIndex];
   if (!seed) return;
 
-  // Calculate remaining assets: input assets - fee - other seeds
-  const inputAssets = spend.input.note.assets;
-  const fee = spend.fee;
+  const inputAssets = BigInt(spend.input.note.assets);
+  const fee = BigInt(spend.fee);
 
   let otherSeedsTotal = BigInt(0);
   for (let i = 0; i < spend.seeds.length; i++) {
     if (i !== seedIndex) {
-      otherSeedsTotal += spend.seeds[i].amount;
+      otherSeedsTotal += BigInt(spend.seeds[i].amount);
     }
   }
-
+  // Calculate remaining assets
   const remaining = inputAssets - fee - otherSeedsTotal;
 
   if (remaining < 0n) {
@@ -562,7 +553,7 @@ function balanceSeed(inputId: string, seedIndex: number) {
     return;
   }
 
-  seed.amount = remaining;
+  seed.amount = String(remaining);
   renderSpends();
   updateBuilder();
 }
@@ -574,9 +565,9 @@ function updateSpendFee(inputId: string, feeStr: string, shouldRender: boolean =
       // Convert NOCK to nicks
       const nock = parseFloat(feeStr);
       if (!isNaN(nock) && nock >= 0) {
-        spend.fee = BigInt(Math.floor(nock * 65536));
+        spend.fee = nockToNicks(nock);
       } else {
-        spend.fee = BigInt(0);
+        spend.fee = '0';
       }
       if (shouldRender) renderSpends();
       updateBuilder();
@@ -591,7 +582,7 @@ function addSeed(inputId: string) {
   if (spend && state.locks.length > 0) {
     spend.seeds.push({
       lockId: state.locks[0].id,
-      amount: BigInt(0),
+      amount: '0',
     });
     renderSpends();
     updateBuilder();
@@ -619,9 +610,9 @@ function updateSeedAmount(
       // Convert NOCK to nicks
       const nock = parseFloat(amountStr);
       if (!isNaN(nock) && nock >= 0) {
-        spend.seeds[seedIndex].amount = BigInt(Math.floor(nock * 65536));
+        spend.seeds[seedIndex].amount = nockToNicks(nock);
       } else {
-        spend.seeds[seedIndex].amount = BigInt(0);
+        spend.seeds[seedIndex].amount = '0';
       }
       if (shouldRender) renderSpends();
       updateBuilder();
@@ -660,60 +651,49 @@ function updateBuilder() {
   try {
     console.log('Building transaction...');
 
-    // Create TxBuilder with default fee-per-word
-    const feePerWord = BigInt(32768); // 0.5 NOCK per word
-    const builder = new wasm.TxBuilder(feePerWord);
+    const txSettings: wasm.TxEngineSettings = {
+      tx_engine_version: 1,
+      tx_engine_patch: 0,
+      min_fee: '256',
+      cost_per_word: '32768',
+      witness_word_div: 1,
+    };
+    const builder = new wasm.TxBuilder(txSettings);
 
-    // Add each spend to the builder using SpendBuilder
     for (const spend of state.spends) {
       const lock = state.locks.find(l => l.id === spend.input.lockId);
       if (!lock) continue;
 
-      // Determine refund lock protobuf (use first seed lock if available, otherwise same as input)
-      const refundLockProtobuf =
+      const refundLock: wasm.SpendCondition | null =
         spend.seeds.length > 0
-          ? state.locks.find(l => l.id === spend.seeds[0].lockId)?.spendConditionProtobuf
-          : lock.spendConditionProtobuf;
+          ? (state.locks.find(l => l.id === spend.seeds[0].lockId)?.spendCondition ?? null)
+          : lock.spendCondition;
 
-      // Deserialize WASM objects from protobuf (fresh instances every time)
-      const noteClone = wasm.Note.fromProtobuf(spend.input.note.note.toProtobuf());
-      const spendConditionClone = wasm.SpendCondition.fromProtobuf(lock.spendConditionProtobuf);
-      const refundLockClone = refundLockProtobuf
-        ? wasm.SpendCondition.fromProtobuf(refundLockProtobuf)
-        : null;
+      const spendBuilder = new wasm.SpendBuilder(
+        spend.input.note.note,
+        lock.spendCondition,
+        refundLock
+      );
 
-      // Create SpendBuilder with note, spend condition, and refund lock
-      const spendBuilder = new wasm.SpendBuilder(noteClone, spendConditionClone, refundLockClone);
-
-      // Add seeds (outputs)
       for (const seed of spend.seeds) {
         const seedLock = state.locks.find(l => l.id === seed.lockId);
         if (seedLock) {
-          // Deserialize spend condition from protobuf
-          const seedSpendCondition = wasm.SpendCondition.fromProtobuf(
-            seedLock.spendConditionProtobuf
-          );
-          // Create a Seed for this output using the constructor
-          const seedObj = new wasm.Seed(
-            null, // output_source
-            wasm.LockRoot.fromSpendCondition(seedSpendCondition), // lock_root
-            seed.amount, // gift
-            wasm.NoteData.empty(), // note_data
-            spend.input.note.note.hash() // parent_hash
-          );
-          spendBuilder.seed(seedObj);
+          const seedV1: wasm.SeedV1 = {
+            output_source: null,
+            lock_root: { Lock: seedLock.spendCondition },
+            note_data: [],
+            gift: seed.amount,
+            parent_hash: wasm.noteHash(spend.input.note.note),
+          };
+          spendBuilder.seed(seedV1);
         }
       }
 
-      // Set fee if specified
-      if (spend.fee > 0) {
+      if (BigInt(spend.fee) > 0n) {
         spendBuilder.fee(spend.fee);
       }
 
-      // Compute refund to balance out the spend
       spendBuilder.computeRefund(false);
-
-      // Attach this spend to the main builder
       builder.spend(spendBuilder);
     }
 
@@ -942,8 +922,10 @@ function renderTransaction() {
       }
     }
 
-    const fee = state.builder.curFee();
-    const calcFee = state.builder.calcFee();
+    const feeStr = state.builder.curFee();
+    const calcFeeStr = state.builder.calcFee();
+    const fee = BigInt(feeStr);
+    const calcFee = BigInt(calcFeeStr);
     const feeSufficient = fee >= calcFee;
 
     // If validate() failed, it might be due to fee or missing unlocks.
@@ -961,32 +943,30 @@ function renderTransaction() {
     txInfo.innerHTML = `
       <div style="background: #262626; padding: 0.75rem; border-radius: 0.375rem; font-size: 0.875rem">
         <div style="margin-bottom: 0.5rem">
-          <span style="color: #9ca3af">Fee:</span> <span style="font-weight: 600">${formatNock(nicksToNock(fee))} NOCK</span>
+          <span style="color: #9ca3af">Fee:</span> <span style="font-weight: 600">${formatNock(nicksToNock(String(fee)))} NOCK</span>
         </div>
         <div style="margin-bottom: 0.5rem">
-          <span style="color: #9ca3af">Calculated Fee:</span> <span>${formatNock(nicksToNock(calcFee))} NOCK</span>
+          <span style="color: #9ca3af">Calculated Fee:</span> <span>${formatNock(nicksToNock(String(calcFee)))} NOCK</span>
         </div>
         <div>
-          <span style="color: #9ca3af">TX ID:</span> ${renderCopyableId(state.nockchainTx.id.value, 'TX ID')}
+          <span style="color: #9ca3af">TX ID:</span> ${renderCopyableId(state.nockchainTx.id, 'TX ID')}
         </div>
       </div>
     `;
 
-    // Outputs
-    const outputs = state.nockchainTx.outputs();
+    // Outputs: 0.2 use nockchainTxToRawTx + rawTxOutputs (maybe doesn't work)
+    const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx);
+    const outputs = wasm.rawTxOutputs(rawTx);
     if (outputs && outputs.length > 0) {
       outputsList.innerHTML = outputs
         .map((output: wasm.Note, index: number) => {
-          const amount = output.assets || BigInt(0);
-
-          // Extract name directly from WASM object
-          const firstName = output.name?.first || '';
-          const lastName = output.name?.last || '';
-
+          const amount = output.assets != null ? BigInt(output.assets) : BigInt(0);
+          const firstName = output.name?.first ?? '';
+          const lastName = output.name?.last ?? '';
           return `
           <div class="output-item">
             <div style="font-weight: 600; margin-bottom: 0.25rem">
-              Output ${index + 1}: ${formatNock(nicksToNock(amount))} NOCK
+              Output ${index + 1}: ${formatNock(nicksToNock(String(amount)))} NOCK
             </div>
             <div style="font-size: 0.75rem; color: #9ca3af">
               ${firstName ? renderNoteName(firstName, lastName) : 'Unknown'}
@@ -1419,109 +1399,64 @@ function confirmAddLock() {
   }
 
   try {
-    // Build lock primitives
-    const primitives: wasm.LockPrimitive[] = [];
+    const primitives: wasm.SpendCondition = [];
 
     for (const prim of modalPrimitives) {
       switch (prim.type) {
-        case 'pkh':
+        case 'pkh': {
           const pkhConfig = prim.pkh || { m: 1, addrs: [] };
           const validAddrs = pkhConfig.addrs.filter(a => a.trim() !== '');
-
           if (validAddrs.length === 0) {
             alert('PKH requires at least one address');
             return;
           }
-
-          // For now, if m=1 and 1 addr, use single.
-          // If m>1 or multiple addrs, we need multisig support in WASM or manual construction
-          // Assuming WASM has Pkh.new(m, addrs) or similar.
-          // Checking iris_wasm.d.ts...
-          // It seems Pkh.single(addr) is what we used.
-          // Let's assume for now we only support single if m=1 and len=1.
-          // Actually, let's try to find if there is a multisig constructor.
-          // If not, we might be limited. But user asked for it.
-          // Let's assume Pkh constructor takes (m, addrs) or similar if we look at the types.
-          // Based on previous knowledge, Pkh might be complex.
-          // Let's try to use Pkh.new(threshold, keys) if it exists, otherwise fallback/error.
-
-          // I will assume for this step that I can create a Pkh object.
-          // If I look at how `wasm.Pkh.single` works, it probably creates a Pkh with threshold 1.
-
-          // Let's try:
-          // const pkh = new wasm.Pkh(pkhConfig.m, pkhConfig.addrs);
-          // If that fails, I'll see in build.
-          // Actually, looking at previous code: `wasm.Pkh.single(state.walletPkh)`
-
-          if (validAddrs.length === 1 && pkhConfig.m === 1) {
-            const pkh = wasm.Pkh.single(validAddrs[0]);
-            primitives.push(wasm.LockPrimitive.newPkh(pkh));
-          } else {
-            try {
-              const pkh = new wasm.Pkh(BigInt(pkhConfig.m), validAddrs);
-              primitives.push(wasm.LockPrimitive.newPkh(pkh));
-            } catch (e) {
-              console.error('Failed to create multisig PKH', e);
-              alert('Failed to create multisig PKH: ' + (e as Error).message);
-              return;
-            }
-          }
+          primitives.push({ Pkh: { m: pkhConfig.m, hashes: validAddrs } });
           break;
-
-        case 'tim':
+        }
+        case 'tim': {
           const timConfig = prim.tim || { type: 'csv', value: 1 };
-          let tim;
+          const value = timConfig.value ?? 0;
           if (timConfig.type === 'csv') {
-            // Relative timelock (CSV)
-            // min=value, max=null for relative part
-            const rel = new wasm.TimelockRange(BigInt(timConfig.value), null);
-            const abs = new wasm.TimelockRange(null, null);
-            tim = new wasm.LockTim(rel, abs);
+            primitives.push({
+              Tim: {
+                rel: { min: value, max: null },
+                abs: { min: null, max: null },
+              },
+            });
           } else {
-            // Absolute timelock (CLTV)
-            // min=value, max=null for absolute part
-            const rel = new wasm.TimelockRange(null, null);
-            const abs = new wasm.TimelockRange(BigInt(timConfig.value), null);
-            tim = new wasm.LockTim(rel, abs);
+            primitives.push({
+              Tim: {
+                rel: { min: null, max: null },
+                abs: { min: value, max: null },
+              },
+            });
           }
-          primitives.push(wasm.LockPrimitive.newTim(tim));
           break;
-
-        case 'hax':
+        }
+        case 'hax': {
           const haxConfig = prim.hax || { hashes: [] };
           const validHashes = haxConfig.hashes.filter(h => h.trim() !== '');
-
           if (validHashes.length === 0) {
-            // Allow empty for "any preimage"? User prompt said "leave blank to require any preimage"
-            // But HAX usually requires at least one hash unless it's a specific "any" type?
-            // If hashes is empty, maybe we don't add it? Or add empty Hax?
-            // `new wasm.Hax([])` might work.
             alert('HAX requires at least one hash.');
             return;
           }
-
-          const digests = validHashes.map(h => new wasm.Digest(h));
-          const hax = new wasm.Hax(digests);
-          primitives.push(wasm.LockPrimitive.newHax(hax));
+          primitives.push({ Hax: validHashes });
           break;
-
+        }
         case 'brn':
-          primitives.push(wasm.LockPrimitive.newBrn());
+          primitives.push('Brn');
           break;
       }
     }
 
-    const spendCondition = new wasm.SpendCondition(primitives);
-
     const newLock: Lock = {
       id: generateId(),
       name,
-      spendConditionProtobuf: spendCondition.toProtobuf(),
+      spendCondition: primitives,
       expanded: false,
     };
 
     state.locks.push(newLock);
-    spendCondition.free(); // Clean up WASM object
     renderLocks();
     closeAddLockModal();
   } catch (e) {
@@ -1537,7 +1472,7 @@ function exportLocks() {
     const locksData = state.locks.map(lock => ({
       id: lock.id,
       name: lock.name,
-      spendCondition: lock.spendConditionProtobuf, // Already protobuf
+      spendCondition: lock.spendCondition, // 0.2: plain array
     }));
 
     const json = JSON.stringify(locksData, null, 2);
@@ -1578,32 +1513,23 @@ function importLocks() {
 
       let importedCount = 0;
       for (const lockData of locksData) {
-        // Validate it's indeed a spend condition by deserializing
-        const spendCondition = wasm.SpendCondition.fromProtobuf(lockData.spendCondition);
-        const hash = spendCondition.hash().value;
-
-        // Check for duplicates by hash
-        const exists = state.locks.some(l => {
-          const existingSc = wasm.SpendCondition.fromProtobuf(l.spendConditionProtobuf);
-          const existingHash = existingSc.hash().value;
-          existingSc.free();
-          return existingHash === hash;
-        });
-
-        if (exists) {
-          console.log(`Skipping duplicate lock: ${lockData.name} (${hash})`);
-          spendCondition.free();
+        const sc = lockData.spendCondition;
+        if (!Array.isArray(sc) || sc.length === 0) {
+          console.log('Skipping invalid lock (expected spendCondition array):', lockData.name);
           continue;
         }
-
-        const lock: Lock = {
+        const hash = wasm.spendConditionHash(sc as wasm.SpendCondition);
+        const exists = state.locks.some(l => wasm.spendConditionHash(l.spendCondition) === hash);
+        if (exists) {
+          console.log(`Skipping duplicate lock: ${lockData.name} (${hash})`);
+          continue;
+        }
+        state.locks.push({
           id: lockData.id || generateId(),
           name: lockData.name || 'Imported Lock',
-          spendConditionProtobuf: lockData.spendCondition, // Store as protobuf
+          spendCondition: sc as wasm.SpendCondition,
           expanded: false,
-        };
-        state.locks.push(lock);
-        spendCondition.free();
+        });
         importedCount++;
       }
 
@@ -1640,8 +1566,9 @@ downloadTxBtn.onclick = () => {
   if (!state.nockchainTx) return;
 
   try {
-    const jamBytes = state.nockchainTx.toJam();
-    const txId = state.nockchainTx.id.value;
+    const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx);
+    const jamBytes = wasm.jam(rawTx as unknown as wasm.Noun);
+    const txId = state.nockchainTx.id;
 
     const blob = new Blob([new Uint8Array(jamBytes)], { type: 'application/jam' });
     const url = URL.createObjectURL(blob);
@@ -1664,31 +1591,43 @@ signTxBtn.onclick = async () => {
   if (!state.nockchainTx || !state.builder || !state.provider) return;
 
   try {
-    // Get all notes and spend conditions from builder
     const txNotes = state.builder.allNotes();
+    const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx) as wasm.RawTxV1;
+    const rawTxProto = wasm.rawTxToProtobuf(rawTx);
+    const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.noteToProtobuf(n));
+    const spendCondProto = txNotes.spend_conditions.map((sc: wasm.SpendCondition) =>
+      wasm.spendConditionToProtobuf(sc)
+    );
 
-    // Sign using provider
     const signedTxProtobuf = await state.provider.signRawTx({
-      rawTx: state.nockchainTx.toRawTx(),
-      notes: txNotes.notes,
-      spendConditions: txNotes.spendConditions,
+      rawTx: rawTxProto,
+      notes: notesProto,
+      spendConditions: spendCondProto,
     });
 
-    // Store signed TX
-    // NockchainTx doesn't have fromProtobuf, so we go via RawTx
-    const signedRawTx = wasm.RawTx.fromProtobuf(signedTxProtobuf);
-    state.signedTx = signedRawTx.toNockchainTx();
+    const signedTxProtoObj =
+      typeof signedTxProtobuf === 'object' && !(signedTxProtobuf instanceof Uint8Array)
+        ? signedTxProtobuf
+        : (signedTxProtobuf as unknown as wasm.PbCom2RawTransaction);
+    const signedRawTx = wasm.rawTxFromProtobuf(signedTxProtoObj) as wasm.RawTxV1;
+    state.signedTx = wasm.rawTxV1ToNockchainTx(signedRawTx);
 
-    // Validate the signed transaction
-    console.log('Validating signed transaction...');
     let isValid = true;
     let validationError = '';
 
     try {
+      const txSettings: wasm.TxEngineSettings = {
+        tx_engine_version: 1,
+        tx_engine_patch: 0,
+        min_fee: '256',
+        cost_per_word: '32768',
+        witness_word_div: 1,
+      };
       const signedBuilder = wasm.TxBuilder.fromTx(
-        state.signedTx.toRawTx(),
+        signedRawTx,
         txNotes.notes,
-        txNotes.spendConditions
+        txNotes.spend_conditions,
+        txSettings
       );
       signedBuilder.validate();
       signedBuilder.free();
@@ -1698,15 +1637,13 @@ signTxBtn.onclick = async () => {
       isValid = false;
       validationError = e instanceof Error ? e.message : String(e);
     }
-
-    console.log(state.signedTx.toRawTx().toProtobuf());
     if (state.signedTx) {
-      state.signedTxId = state.signedTx.id.value;
-      // Show signed TX section
+      state.signedTxId = state.signedTx.id;
       signedTxSection.classList.remove('hidden');
-
-      // Render TX ID
-      signedTxIdEl.innerHTML = renderCopyableId(state.signedTxId, 'Signed TX ID');
+      signedTxIdEl.innerHTML = renderCopyableId(
+        state.signedTxId ?? state.signedTx.id,
+        'Signed TX ID'
+      );
 
       // Render Validation Status
       const signedTxValidation = document.getElementById('signedTxValidation');
@@ -1738,7 +1675,8 @@ document.getElementById('downloadSignedTxBtn')!.onclick = () => {
   if (!state.signedTx || !state.signedTxId) return;
 
   try {
-    const jamBytes = state.signedTx.toJam();
+    const rawTx = wasm.nockchainTxToRawTx(state.signedTx);
+    const jamBytes = wasm.jam(rawTx as unknown as wasm.Noun);
     const blob = new Blob([new Uint8Array(jamBytes)], { type: 'application/jam' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1749,7 +1687,8 @@ document.getElementById('downloadSignedTxBtn')!.onclick = () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    const rawTxBytes = state.signedTx.toRawTx().toJam();
+    const rawTxForJam = wasm.nockchainTxToRawTx(state.signedTx);
+    const rawTxBytes = wasm.jam(rawTxForJam as unknown as wasm.Noun);
     const blobRaw = new Blob([new Uint8Array(rawTxBytes)], { type: 'application/jam' });
     const urlRaw = URL.createObjectURL(blobRaw);
     const aRaw = document.createElement('a');
@@ -1771,8 +1710,8 @@ document.getElementById('submitSignedTxBtn')!.onclick = async () => {
   try {
     if (!state.grpcClient) throw new Error('gRPC client not initialized');
 
-    // Convert to protobuf for sending
-    const txProtobuf = state.signedTx.toRawTx().toProtobuf();
+    const rawTx = wasm.nockchainTxToRawTx(state.signedTx) as wasm.RawTxV1;
+    const txProtobuf = wasm.rawTxToProtobuf(rawTx);
     await state.grpcClient.sendTransaction(txProtobuf);
 
     console.log('Transaction submitted successfully!');

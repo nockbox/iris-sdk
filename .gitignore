@@ -5,6 +5,7 @@ lib/nbx-wasm
 # Build output
 dist/
 examples-dist/
+vendor/
 
 # TypeScript
 *.tsbuildinfo

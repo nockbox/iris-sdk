@@ -21,8 +21,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "vendor/iris-wasm"
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",

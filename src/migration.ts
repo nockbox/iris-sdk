@@ -14,13 +14,13 @@ import type {
   RawTxV1,
   SpendCondition,
   TxEngineSettings,
-  TxNotes,
 } from '@nockbox/iris-wasm/iris_wasm.js';
 import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
 
 function buildSinglePkhSpendCondition(pkh: string): SpendCondition {
-  return [{ Pkh: { m: 1, hashes: [pkh] } }];
+  const pkhObj = wasm.pkhSingle(pkh);
+  return wasm.spendConditionNewPkh(pkhObj);
 }
 
 function isLegacyEntry(entry: PbCom2BalanceEntry): boolean {
@@ -91,7 +91,7 @@ export async function queryV0BalanceForAddress(
     if (!isLegacyEntry(entry) || !entry.note) {
       continue;
     }
-    const parsed = wasm.note_from_protobuf(entry.note);
+    const parsed = wasm.noteFromProtobuf(entry.note);
     if (isNoteV0(parsed)) {
       v0Notes.push(parsed);
     }
@@ -185,7 +185,7 @@ export async function buildV0MigrationTransaction(
   const builder = new wasm.TxBuilder(txSettings);
 
   for (const note of v0Notes) {
-    const spendBuilder = new wasm.SpendBuilder(note, null, targetSpendCondition);
+    const spendBuilder = new wasm.SpendBuilder(note, targetSpendCondition, null, null);
     // Use refund path to migrate full note value into target lock.
     spendBuilder.computeRefund(includeLockDataVal);
     builder.spend(spendBuilder);
@@ -194,7 +194,7 @@ export async function buildV0MigrationTransaction(
   builder.recalcAndSetFee(includeLockDataVal);
   const feeResult = builder.calcFee();
   const transaction = builder.build();
-  const txNotes = builder.allNotes() as TxNotes;
+  const allNotes = builder.allNotes();
   const txId = transaction.id;
   const rawTx: RawTxV1 = {
     version: 1,
@@ -202,11 +202,8 @@ export async function buildV0MigrationTransaction(
     spends: transaction.spends,
   };
 
-  const inputNotes = txNotes.notes.filter((note): note is NoteV0 => isNoteV0(note));
-  const spendConditions =
-    txNotes.spend_conditions.length === inputNotes.length
-      ? txNotes.spend_conditions
-      : inputNotes.map(() => targetSpendCondition);
+  const inputNotes = allNotes.filter((note): note is NoteV0 => isNoteV0(note));
+  const spendConditions = inputNotes.map(() => targetSpendCondition);
   const result: BuildV0MigrationTransactionResult = {
     transaction,
     txId,
@@ -256,14 +253,14 @@ async function buildV0MigrationTransactionSingleNote(
   const minAssets = candidates.reduce((min, c) => (c.assets < min ? c.assets : min), candidates[0].assets);
   const selected = candidates.find(c => c.assets === minAssets)!;
 
-  const spendBuilder = new wasm.SpendBuilder(selected.note, null, targetSpendCondition);
+  const spendBuilder = new wasm.SpendBuilder(selected.note, targetSpendCondition, null, null);
   spendBuilder.computeRefund(false);
   builder.spend(spendBuilder);
 
   builder.recalcAndSetFee(false);
   const feeNicks = builder.calcFee();
   const transaction = builder.build();
-  const txNotes = builder.allNotes() as TxNotes;
+  const allNotes = builder.allNotes();
   const rawTx: RawTxV1 = {
     version: 1,
     id: transaction.id,
@@ -271,11 +268,8 @@ async function buildV0MigrationTransactionSingleNote(
   };
 
   const feeNicksBigInt = BigInt(feeNicks);
-  const inputNotes = txNotes.notes.filter((note): note is NoteV0 => isNoteV0(note));
-  const spendConditions =
-    txNotes.spend_conditions.length === inputNotes.length
-      ? txNotes.spend_conditions
-      : inputNotes.map(() => targetSpendCondition);
+  const inputNotes = allNotes.filter((note): note is NoteV0 => isNoteV0(note));
+  const spendConditions = inputNotes.map(() => targetSpendCondition);
   const result: BuildV0MigrationSingleNoteResult = {
     transaction,
     txId: transaction.id,
@@ -353,7 +347,7 @@ export async function buildV0MigrationTransactionFromNotes(
 ): Promise<BuildV0MigrationSingleNoteResult> {
   const v0Notes: NoteV0[] = [];
   for (const notePb of v0NotesProtobuf) {
-    const parsed = wasm.note_from_protobuf(notePb as Parameters<typeof wasm.note_from_protobuf>[0]);
+    const parsed = wasm.noteFromProtobuf(notePb as Parameters<typeof wasm.noteFromProtobuf>[0]);
     if (isNoteV0(parsed)) {
       v0Notes.push(parsed);
     }

@@ -143,11 +143,11 @@ export async function buildBridgeTransaction(
   const bridgeNounJs = buildBridgeNoun(params.destinationAddress, config);
   const noteData: NoteData = [[config.noteDataKey, bridgeNounJs as Noun]];
 
-  const bridgeSpendCondition: SpendCondition = [
-    { Pkh: { m: config.threshold, hashes: config.addresses } },
-  ];
-  const bridgeLockRoot: LockRoot = { Lock: bridgeSpendCondition };
-  const refundLock: SpendCondition = [{ Pkh: { m: 1, hashes: [params.refundPkh] } }];
+  const bridgePkh = wasm.pkhNew(BigInt(config.threshold), config.addresses);
+  const bridgeSpendCondition: SpendCondition = wasm.spendConditionNewPkh(bridgePkh);
+  const bridgeLockRoot: LockRoot = bridgeSpendCondition;
+  const refundPkhObj = wasm.pkhSingle(params.refundPkh);
+  const refundLock: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
 
   const costPerWord = params.feeOverride ?? config.feePerWord;
   const builder = new wasm.TxBuilder({
@@ -162,9 +162,9 @@ export async function buildBridgeTransaction(
     const note = params.inputNotes[i];
     const spendCondition = params.spendConditions[i];
 
-    const spendBuilder = new wasm.SpendBuilder(note, spendCondition, refundLock);
+    const spendBuilder = new wasm.SpendBuilder(note, spendCondition, null, refundLock);
 
-    const parentHash = wasm.note_hash(note);
+    const parentHash = wasm.noteHash(note);
     const seed: SeedV1 = {
       output_source: null,
       lock_root: bridgeLockRoot,

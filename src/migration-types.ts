@@ -1,9 +1,9 @@
 /**
  * Types for querying v0 balance and building v0 -> v1 migration transactions.
- * Aligned with @nockbox/iris-wasm (Nicks, NockchainTx, NoteV0, RawTx, SpendCondition).
+ * Aligned with @nockbox/iris-wasm (Nicks, NoteV0, RawTx, SpendCondition).
  */
 import type {
-  NockchainTx,
+  LockRoot,
   Nicks,
   NoteV0,
   PbCom2Balance,
@@ -13,47 +13,38 @@ import type {
 
 export type { Nicks };
 
-/** Legacy address metadata derived from mnemonic. */
-export interface DerivedV0Address {
-  /** Base58 bare public key (legacy address form). */
-  sourceAddress: string;
-}
+/** Base58 bare public key derived from mnemonic. */
+export type DerivedV0Address = string;
 
-/** Result of querying v0 balance. */
-export interface QueryV0BalanceResult {
+/** Result of querying v0 balance. Use this to construct a migration transaction. */
+export interface V0BalanceResult {
+  sourceAddress: string;
   balance: PbCom2Balance;
   v0Notes: NoteV0[];
   totalNicks: Nicks;
+  totalNock: number;
+  smallestNoteNock?: number;
+  rawNotesFromRpc?: number;
 }
 
-/** Result of mnemonic-based v0 discovery (derived address + balance). */
-export interface QueryV0BalanceFromMnemonicResult
-  extends QueryV0BalanceResult,
-    DerivedV0Address {}
-
-/** Result of building a migration transaction. */
-export interface BuildV0MigrationTransactionResult {
-  transaction: NockchainTx;
-  txId: string;
-  fee: Nicks;
-  signRawTxPayload: {
+/** buildV0MigrationTx result: balance fields always present; tx fields when target provided and build succeeded. */
+export interface BuildV0MigrationTxResult {
+  sourceAddress: string;
+  balance: PbCom2Balance;
+  v0Notes: NoteV0[];
+  totalNicks: Nicks;
+  totalNock: number;
+  smallestNoteNock?: number;
+  rawNotesFromRpc?: number;
+  txId?: string;
+  fee?: Nicks;
+  feeNock?: number;
+  signRawTxPayload?: {
     rawTx: RawTx;
     notes: NoteV0[];
-    spendConditions: SpendCondition[];
+    spendConditions: (SpendCondition | null)[];
+    refundLock: LockRoot;
   };
-}
-
-/** Result of single-note migration (matches extension logic). */
-export interface BuildV0MigrationSingleNoteResult extends BuildV0MigrationTransactionResult {
-  migratedNicks: Nicks;
-  migratedNock: number;
-  selectedNoteNicks: Nicks;
-  selectedNoteNock: number;
-  feeNock: number;
-}
-
-/** Result of mnemonic-based migration build. */
-export interface BuildV0MigrationFromMnemonicResult
-  extends BuildV0MigrationTransactionResult {
-  discovery: QueryV0BalanceFromMnemonicResult;
+  migratedNicks?: Nicks;
+  migratedNock?: number;
 }

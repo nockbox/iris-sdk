@@ -1,10 +1,7 @@
 import type {
-  BuildV0MigrationFromMnemonicResult,
-  BuildV0MigrationTransactionResult,
-  BuildV0MigrationSingleNoteResult,
+  BuildV0MigrationTxResult,
   DerivedV0Address,
-  QueryV0BalanceFromMnemonicResult,
-  QueryV0BalanceResult,
+  V0BalanceResult,
 } from './migration-types.js';
 import type {
   Note,
@@ -38,52 +35,30 @@ function sumNicks(notes: NoteV0[]): string {
 
 const NOCK_TO_NICKS = 65_536;
 
-function normalizeGrpcEndpoint(endpoint: string): string {
-  const trimmed = endpoint?.trim() || '';
-  if (!trimmed) return trimmed;
-  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-}
-
 /**
- * Derive legacy v0 address metadata from mnemonic.
- *
- * v0 discovery queries use the base58-encoded bare public key ("sourceAddress").
+ * Derive legacy v0 address (base58 bare public key) from mnemonic.
  */
-export function deriveV0AddressFromMnemonic(
-  mnemonic: string,
-  passphrase?: string,
-  childIndex?: number
-): DerivedV0Address {
-  const master = wasm.deriveMasterKeyFromMnemonic(mnemonic, passphrase ?? '');
+export function deriveV0AddressFromMnemonic(mnemonic: string): DerivedV0Address {
+  const master = wasm.deriveMasterKeyFromMnemonic(mnemonic);
   try {
-    const key = childIndex === undefined ? master : master.deriveChild(childIndex);
-    try {
-      const publicKey = Uint8Array.from(key.publicKey);
-      const sourceAddress = base58.encode(publicKey);
-      return { sourceAddress };
-    } finally {
-      if (key !== master) key.free();
-    }
+    const publicKey = Uint8Array.from(master.publicKey);
+    return base58.encode(publicKey);
   } finally {
     master.free();
   }
 }
 
 /**
- * Query address balance and return only v0 (Legacy) notes.
+ * Query v0 (Legacy) balance for a mnemonic. Discovery only; does not build a transaction.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  */
-export async function queryV0BalanceForAddress(
-  grpcEndpoint: string,
-  address: string
-): Promise<QueryV0BalanceResult> {
-  if (!address) {
-    throw new Error('address is required');
-  }
-
-  const normalizedEndpoint = normalizeGrpcEndpoint(grpcEndpoint);
-  const grpcClient = new wasm.GrpcClient(normalizedEndpoint);
-  const balance = await grpcClient.getBalanceByAddress(address);
+export async function queryV0Balance(
+  mnemonic: string,
+  grpcEndpoint: string
+): Promise<V0BalanceResult> {
+  const sourceAddress = deriveV0AddressFromMnemonic(mnemonic);
+  const grpcClient = new wasm.GrpcClient(grpcEndpoint);
+  const balance = await grpcClient.getBalanceByAddress(sourceAddress);
 
   const v0Notes: NoteV0[] = [];
   const entries = balance.notes ?? [];
@@ -97,278 +72,129 @@ export async function queryV0BalanceForAddress(
     }
   }
 
+  const totalNicks = sumNicks(v0Notes);
+  const totalNock = Number(BigInt(totalNicks)) / NOCK_TO_NICKS;
+  const smallestNoteNock =
+    v0Notes.length > 0
+      ? Number(v0Notes.reduce((min, n) => (BigInt(n.assets) < min ? BigInt(n.assets) : min), BigInt(v0Notes[0].assets))) /
+        NOCK_TO_NICKS
+      : undefined;
+
   return {
+    sourceAddress,
     balance,
     v0Notes,
-    totalNicks: sumNicks(v0Notes),
+    totalNicks,
+    totalNock,
+    smallestNoteNock,
+    rawNotesFromRpc: entries.length,
   };
 }
 
-/**
- * Derive v0 discovery address from mnemonic and query legacy notes in one step.
- * Tries master key first; if no Legacy notes found, retries with child index 0
- * (some v0 wallets used child derivation).
- */
-export async function queryV0BalanceFromMnemonic(
-  mnemonic: string,
-  grpcEndpoint: string,
-  passphrase?: string,
-  childIndex?: number
-): Promise<QueryV0BalanceFromMnemonicResult> {
-  const derived = deriveV0AddressFromMnemonic(mnemonic, passphrase, childIndex);
-  const queried = await queryV0BalanceForAddress(grpcEndpoint, derived.sourceAddress);
-
-  if (queried.v0Notes.length > 0) {
-    return { ...derived, ...queried };
-  }
-
-  if (childIndex === undefined) {
-    const derivedChild0 = deriveV0AddressFromMnemonic(mnemonic, passphrase, 0);
-    const queriedChild0 = await queryV0BalanceForAddress(grpcEndpoint, derivedChild0.sourceAddress);
-    if (queriedChild0.v0Notes.length > 0) {
-      return { ...derivedChild0, ...queriedChild0 };
-    }
-  }
-
-  return { ...derived, ...queried };
+function defaultTxEngineSettings(): TxEngineSettings {
+  return wasm.txEngineSettingsV1BythosDefault();
 }
 
-/** Patch 1 (Bythos) - fee auto-calculated via recalcAndSetFee */
-const DEFAULT_TX_ENGINE_SETTINGS: TxEngineSettings = {
-  tx_engine_version: 1,
-  tx_engine_patch: 1,
-  min_fee: '256',
-  cost_per_word: '16384', // 1 << 14
-  witness_word_div: 4,
-};
-
 /**
- * Build a transaction that migrates v0 notes into a v1 PKH lock.
+ * Fetch v0 balance and optionally build migration tx to a v1 PKH lock.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  *
- * @param options.singleNoteOnly - [TEMPORARY] When true, uses single-note logic for testing.
- * @param options.debug - [TEMPORARY] When true, logs the built result to console.
+ * @param targetV1Pkh - When provided, builds the migration tx. Omit for balance only.
+ * @param options.debug - When true, logs the built result to console.
  */
-export async function buildV0MigrationTransaction(
-  v0Notes: NoteV0[],
-  targetV1Pkh: string,
-  feePerWord?: Nicks,
-  includeLockData?: boolean,
-  settings?: Partial<TxEngineSettings>,
-  options?: { singleNoteOnly?: boolean; debug?: boolean }
-): Promise<BuildV0MigrationTransactionResult | BuildV0MigrationSingleNoteResult> {
-  if (!v0Notes.length) {
-    throw new Error('No v0 notes provided for migration');
-  }
-
-  const singleNoteOnly = options?.singleNoteOnly ?? false;
-  const debug = options?.debug ?? false;
-
-  if (singleNoteOnly) {
-    const result = await buildV0MigrationTransactionSingleNote(
-      v0Notes,
-      targetV1Pkh,
-      feePerWord,
-      settings,
-      debug
-    );
-    return result;
-  }
-
-  const includeLockDataVal = !!includeLockData;
-  const txSettings: TxEngineSettings = {
-    ...DEFAULT_TX_ENGINE_SETTINGS,
-    ...settings,
-    cost_per_word: feePerWord ?? settings?.cost_per_word ?? DEFAULT_TX_ENGINE_SETTINGS.cost_per_word,
-  };
-  const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
-  const builder = new wasm.TxBuilder(txSettings);
-
-  for (const note of v0Notes) {
-    const spendBuilder = new wasm.SpendBuilder(note, targetSpendCondition, null, null);
-    // Use refund path to migrate full note value into target lock.
-    spendBuilder.computeRefund(includeLockDataVal);
-    builder.spend(spendBuilder);
-  }
-
-  builder.recalcAndSetFee(includeLockDataVal);
-  const feeResult = builder.calcFee();
-  const transaction = builder.build();
-  const allNotes = builder.allNotes();
-  const txId = transaction.id;
-  const rawTx: RawTxV1 = {
-    version: 1,
-    id: transaction.id,
-    spends: transaction.spends,
-  };
-
-  const inputNotes = allNotes.filter((note): note is NoteV0 => isNoteV0(note));
-  const spendConditions = inputNotes.map(() => targetSpendCondition);
-  const result: BuildV0MigrationTransactionResult = {
-    transaction,
-    txId,
-    fee: feeResult,
-    signRawTxPayload: {
-      rawTx,
-      notes: inputNotes,
-      spendConditions,
-    },
-  };
-
-  if (debug) {
-    console.log('[SDK Migration] buildV0MigrationTransaction (full)', result);
-  }
-
-  return result;
-}
-
-/**
- * Single-note migration (same logic as regular path, but one note).
- * Picks any of the smallest notes (there may be multiple with the same size).
- */
-async function buildV0MigrationTransactionSingleNote(
-  v0Notes: NoteV0[],
-  targetV1Pkh: string,
-  feePerWord?: Nicks,
-  settings?: Partial<TxEngineSettings>,
-  debug?: boolean
-): Promise<BuildV0MigrationSingleNoteResult> {
-  const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
-  const txSettings: TxEngineSettings = {
-    ...DEFAULT_TX_ENGINE_SETTINGS,
-    ...settings,
-    cost_per_word: feePerWord ?? settings?.cost_per_word ?? DEFAULT_TX_ENGINE_SETTINGS.cost_per_word,
-  };
-  const builder = new wasm.TxBuilder(txSettings);
-
-  const candidates: Array<{ note: NoteV0; assets: bigint }> = v0Notes.map(note => ({
-    note,
-    assets: BigInt(note.assets),
-  }));
-
-  if (!candidates.length) {
-    throw new Error('No v0 notes to migrate.');
-  }
-
-  const minAssets = candidates.reduce((min, c) => (c.assets < min ? c.assets : min), candidates[0].assets);
-  const selected = candidates.find(c => c.assets === minAssets)!;
-
-  const spendBuilder = new wasm.SpendBuilder(selected.note, targetSpendCondition, null, null);
-  spendBuilder.computeRefund(false);
-  builder.spend(spendBuilder);
-
-  builder.recalcAndSetFee(false);
-  const feeNicks = builder.calcFee();
-  const transaction = builder.build();
-  const allNotes = builder.allNotes();
-  const rawTx: RawTxV1 = {
-    version: 1,
-    id: transaction.id,
-    spends: transaction.spends,
-  };
-
-  const feeNicksBigInt = BigInt(feeNicks);
-  const inputNotes = allNotes.filter((note): note is NoteV0 => isNoteV0(note));
-  const spendConditions = inputNotes.map(() => targetSpendCondition);
-  const result: BuildV0MigrationSingleNoteResult = {
-    transaction,
-    txId: transaction.id,
-    fee: feeNicks,
-    migratedNicks: selected.assets.toString(),
-    migratedNock: Number(selected.assets) / NOCK_TO_NICKS,
-    selectedNoteNicks: selected.assets.toString(),
-    selectedNoteNock: Number(selected.assets) / NOCK_TO_NICKS,
-    feeNock: Number(feeNicksBigInt) / NOCK_TO_NICKS,
-    signRawTxPayload: {
-      rawTx,
-      notes: inputNotes,
-      spendConditions,
-    },
-  };
-
-  if (debug) {
-    console.log('[SDK Migration] buildV0MigrationTransactionSingleNote', result);
-  }
-
-  return result;
-}
-
-/**
- * Derive v0 address, query legacy notes, and build migration transaction in one step.
- *
- * @param options.singleNoteOnly - [TEMPORARY] When true, migrates 200 NOCK from one note.
- * @param options.debug - [TEMPORARY] When true, logs the built result to console.
- */
-export async function buildV0MigrationFromMnemonic(
+export async function buildV0MigrationTx(
   mnemonic: string,
   grpcEndpoint: string,
-  targetV1Pkh: string,
-  passphrase?: string,
-  childIndex?: number,
-  feePerWord?: Nicks,
-  includeLockData?: boolean,
-  settings?: Partial<TxEngineSettings>,
-  options?: { singleNoteOnly?: boolean; debug?: boolean }
-): Promise<BuildV0MigrationFromMnemonicResult> {
-  const discovery = await queryV0BalanceFromMnemonic(mnemonic, grpcEndpoint, passphrase, childIndex);
-  const buildOptions = options?.singleNoteOnly
-    ? { singleNoteOnly: true as const, debug: options?.debug }
-    : { debug: options?.debug };
-  const built = await buildV0MigrationTransaction(
-    discovery.v0Notes,
-    targetV1Pkh,
-    feePerWord,
-    includeLockData,
-    settings,
-    buildOptions
-  );
-
-  const result = {
-    ...built,
-    discovery,
-  };
-
-  if (options?.debug) {
-    console.log('[SDK Migration] buildV0MigrationFromMnemonic', result);
-  }
-
-  return result;
-}
-
-/**
- * Build migration from protobuf notes (matches extension API).
- * Caller must have initialized WASM before using.
- */
-export async function buildV0MigrationTransactionFromNotes(
-  v0NotesProtobuf: unknown[],
-  targetV1Pkh: string,
-  feePerWord: Nicks = '32768',
+  targetV1Pkh?: string,
   options?: { debug?: boolean }
-): Promise<BuildV0MigrationSingleNoteResult> {
-  const v0Notes: NoteV0[] = [];
-  for (const notePb of v0NotesProtobuf) {
-    const parsed = wasm.noteFromProtobuf(notePb as Parameters<typeof wasm.noteFromProtobuf>[0]);
-    if (isNoteV0(parsed)) {
-      v0Notes.push(parsed);
-    }
+): Promise<BuildV0MigrationTxResult> {
+  const balanceResult = await queryV0Balance(mnemonic, grpcEndpoint);
+  if (!targetV1Pkh) {
+    return balanceResult;
   }
 
-  const result = await buildV0MigrationTransactionSingleNote(
-    v0Notes,
-    targetV1Pkh,
-    feePerWord,
-    undefined,
-    options?.debug ?? false
-  );
+  const debug = options?.debug ?? false;
+  const useSingleNote = debug;
 
-  return result;
+  try {
+    const v0Notes = balanceResult.v0Notes;
+    if (!v0Notes.length) {
+      throw new Error('No v0 notes to migrate');
+    }
+
+    const notesToUse: NoteV0[] = useSingleNote
+      ? (() => {
+          const sorted = [...v0Notes]
+            .map(n => ({ note: n, assets: BigInt(n.assets) }))
+            .sort((a, b) => (a.assets < b.assets ? -1 : a.assets > b.assets ? 1 : 0));
+          return [sorted[0].note];
+        })()
+      : v0Notes;
+
+    const txSettings = defaultTxEngineSettings();
+    const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
+    const refundLock = wasm.locky(targetSpendCondition);
+    const builder = new wasm.TxBuilder(txSettings);
+
+    for (const note of notesToUse) {
+      const spendBuilder = new wasm.SpendBuilder(note, null, null, refundLock);
+      spendBuilder.computeRefund(false);
+      builder.spend(spendBuilder);
+    }
+
+    builder.recalcAndSetFee(false);
+    const feeNicks = builder.curFee();
+    const transaction = builder.build();
+    const allNotes = builder.allNotes();
+    const rawTx: RawTxV1 = {
+      version: 1,
+      id: transaction.id,
+      spends: transaction.spends,
+    };
+
+    const inputNotes = allNotes.filter((note): note is NoteV0 => isNoteV0(note));
+    const feeNock = Number(BigInt(feeNicks)) / NOCK_TO_NICKS;
+
+    const migrated = useSingleNote
+      ? (() => {
+          const note = notesToUse[0];
+          const nock = Number(BigInt(note.assets)) / NOCK_TO_NICKS;
+          return {
+            migratedNicks: BigInt(note.assets).toString(),
+            migratedNock: nock,
+          };
+        })()
+      : {
+          migratedNicks: (BigInt(balanceResult.totalNicks) - BigInt(feeNicks)).toString(),
+          migratedNock: balanceResult.totalNock - feeNock,
+        };
+
+    const result: BuildV0MigrationTxResult = {
+      ...balanceResult,
+      txId: transaction.id,
+      fee: feeNicks,
+      feeNock,
+      signRawTxPayload: {
+        rawTx,
+        notes: inputNotes,
+        spendConditions: inputNotes.map(() => null),
+        refundLock,
+      },
+      ...migrated,
+    };
+
+    if (debug) {
+      console.log('[SDK Migration] buildV0MigrationTx', result);
+    }
+    return result;
+  } catch (e) {
+    console.warn('[SDK Migration] Build failed, returning balance only:', e);
+    return balanceResult;
+  }
 }
 
 export type {
-  BuildV0MigrationFromMnemonicResult,
-  BuildV0MigrationTransactionResult,
-  BuildV0MigrationSingleNoteResult,
+  BuildV0MigrationTxResult,
   DerivedV0Address,
-  QueryV0BalanceFromMnemonicResult,
-  QueryV0BalanceResult,
+  V0BalanceResult,
 } from './migration-types.js';

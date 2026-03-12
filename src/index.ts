@@ -10,5 +10,6 @@ export * from './migration.js';
 export * from './errors.js';
 export * from './constants.js';
 export * from './compat.js';
+export * from './bridge.js';
 export * as wasm from './wasm.js';
 export { initWasm } from './wasm.js';

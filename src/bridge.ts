@@ -149,37 +149,46 @@ export async function buildBridgeTransaction(
   const refundPkhObj = wasm.pkhSingle(params.refundPkh);
   const refundLock: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
 
-  const costPerWord = params.feeOverride ?? config.feePerWord;
-  const builder = new wasm.TxBuilder({
-    tx_engine_version: 1,
-    tx_engine_patch: 0,
-    min_fee: '256',
-    cost_per_word: costPerWord,
-    witness_word_div: 1,
-  });
+  const txSettings =
+    params.txEngineSettings ?? {
+      tx_engine_version: 1,
+      tx_engine_patch: 0,
+      min_fee: '256',
+      cost_per_word: params.feeOverride ?? config.feePerWord,
+      witness_word_div: 1,
+    };
+  const builder = new wasm.TxBuilder(txSettings);
+
+  let remainingGift = BigInt(params.amountInNicks);
 
   for (let i = 0; i < params.inputNotes.length; i++) {
     const note = params.inputNotes[i];
     const spendCondition = params.spendConditions[i];
+    const noteAssets = BigInt(note.assets ?? 0);
+
+    const giftPortion = remainingGift < noteAssets ? remainingGift : noteAssets;
+    remainingGift -= giftPortion;
 
     const spendBuilder = new wasm.SpendBuilder(note, spendCondition, null, refundLock);
 
-    const parentHash = wasm.noteHash(note);
-    const seed: SeedV1 = {
-      output_source: null,
-      lock_root: bridgeLockRoot,
-      note_data: noteData,
-      gift: params.amountInNicks,
-      parent_hash: parentHash,
-    };
+    if (giftPortion > 0n) {
+      const parentHash = wasm.noteHash(note);
+      const seed: SeedV1 = {
+        output_source: null,
+        lock_root: bridgeLockRoot,
+        note_data: noteData,
+        gift: String(giftPortion),
+        parent_hash: parentHash,
+      };
+      spendBuilder.seed(seed);
+    }
 
-    spendBuilder.seed(seed);
     spendBuilder.computeRefund(false);
     builder.spend(spendBuilder);
   }
 
   builder.recalcAndSetFee(false);
-  const feeResult = builder.calcFee();
+  const feeResult = builder.curFee();
   const transaction = builder.build();
 
   const txId = transaction.id;
@@ -385,4 +394,5 @@ export type {
   BridgeTransactionParams,
   BridgeTransactionResult,
   BridgeValidationResult,
+  TxEngineSettings,
 } from './bridge-types.js';

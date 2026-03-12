@@ -30,6 +30,15 @@ export interface BridgeConfig {
   expectedLockRoot?: string;
 }
 
+/** Tx engine settings for TxBuilder (matches wasm.TxEngineSettings). */
+export interface TxEngineSettings {
+  tx_engine_version: 0 | 1 | 2;
+  tx_engine_patch: number;
+  min_fee: string;
+  cost_per_word: string;
+  witness_word_div: number;
+}
+
 /**
  * Parameters for building a bridge transaction.
  * Input notes and spend conditions are supplied by the consumer (e.g. from gRPC).
@@ -47,6 +56,8 @@ export interface BridgeTransactionParams {
   refundPkh: string;
   /** Optional fee override in nicks */
   feeOverride?: Nicks;
+  /** Optional: tx engine settings (Bythos at block ≥54000). When provided, overrides config.feePerWord. */
+  txEngineSettings?: TxEngineSettings;
 }
 
 /**

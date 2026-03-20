@@ -5,7 +5,6 @@
 
 export * from './types.js';
 export * from './provider.js';
-export * from './transaction.js';
 export * from './errors.js';
 export * from './constants.js';
 export * from './compat.js';

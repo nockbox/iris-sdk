@@ -2,28 +2,21 @@
  * TypeScript type definitions for Iris SDK
  */
 
+import { Nicks, TxEngineSettings, PublicKey, Signature, Digest, NockchainTx, Note } from './wasm';
+
 /**
  * Transaction object representing a Nockchain transaction
  */
-export type NicksLike = number | string | bigint;
-
-export interface Transaction {
-  /** Recipient address (base58-encoded public key hash / PKH) */
-  to: string;
-  /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
-  amount: NicksLike;
-  /** Transaction fee in nicks (legacy number + canonical string/bigint accepted) */
-  fee?: NicksLike;
-}
+export type NicksLike = number | Nicks | bigint;
 
 /**
  * RPC request object for communicating with the extension
  */
-export interface RpcRequest {
+export interface RpcRequest<T = unknown> {
   /** The RPC method to call */
   method: string;
   /** Optional parameters for the method */
-  params?: unknown[];
+  params?: T;
   /** Optional timeout for the request */
   timeout?: number;
 }
@@ -40,6 +33,69 @@ export interface RpcResponse<T = unknown> {
     message: string;
     data?: unknown;
   };
+}
+
+export interface ConnectRequest {
+  /** SDK will pass its RPC_API_VERSION */
+  api: string;
+}
+
+export interface RpcConfig {
+  rpcUrl: string;
+  networkName: string;
+  blockExplorerUrl: string;
+  txEngineActivationHeights: Record<number, TxEngineSettings>;
+  coinbaseTimelockBlocks: number;
+};
+
+export interface ConnectResponse {
+  account: Account;
+  rpcConfig: RpcConfig;
+}
+
+export interface V0Account {
+  type: "v0";
+  address: PublicKey;
+}
+
+export interface V1Account {
+  type: "v1";
+  address: Digest;
+}
+
+export type Account = V0Account | V1Account;
+export type Address = PublicKey | Digest;
+
+export interface SignMessageRequest {
+  message: string;
+}
+
+export interface SignMessageResponse {
+  signature: Signature;
+  /** Base58 encoded public key */
+  publicKey: PublicKey;
+}
+
+export interface SendTransactionRequest {
+  /** Recipient address (base58-encoded public key hash / PKH) */
+  to: Address;
+  /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
+  amount: Nicks;
+  /** Transaction fee in nicks (legacy number + canonical string/bigint accepted) */
+  fee?: Nicks;
+}
+
+export interface SignTxRequest {
+  tx: NockchainTx;
+  /**
+   * Optional notes for the transaction. Required for API 0 wallet compatibility.
+   * This will be removed in future SDK releases.
+   */
+  notes?: Note[];
+}
+
+export interface SignTxResponse {
+  tx: NockchainTx;
 }
 
 /**
@@ -61,7 +117,7 @@ export interface InjectedNockchain {
    * @param request - The RPC request object
    * @returns Promise resolving to the result
    */
-  request<T = unknown>(request: RpcRequest): Promise<T>;
+  request<Req = unknown, Res = unknown>(request: RpcRequest<Req>): Promise<Res>;
 
   /**
    * Provider name (e.g., 'iris')
@@ -72,6 +128,11 @@ export interface InjectedNockchain {
    * Provider version
    */
   version?: string;
+
+  /**
+   * Supported RPC API version
+   */
+  api?: string;
 }
 
 /**

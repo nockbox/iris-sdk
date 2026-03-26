@@ -2,40 +2,28 @@
  * Backward-compatibility helpers for SDK request payloads.
  */
 
-import type { Transaction, NicksLike } from './types.js';
-import type {
+import type { SendTransactionRequest, NicksLike, RpcRequest, RpcResponse, ConnectRequest, ConnectResponse, SignMessageRequest, SignTxRequest, SignMessageResponse, SignTxResponse } from './types.js';
+import {
   PbCom2RawTransaction,
   PbCom2Note,
   PbCom2SpendCondition,
-  RawTx,
-  Note,
+  guard,
+  rawTxFromProtobuf,
+  rawTxV1ToNockchainTx,
+  nockchainTxToRawTx,
+  rawTxInputSpendConditions,
+  publicKeyFromHex,
+  publicKeyToHex,
+  RawTxV1,
+  noteToProtobuf,
+  spendConditionToProtobuf,
   SpendCondition,
-} from '@nockbox/iris-wasm/iris_wasm.js';
-import * as guard from './iris_wasm.guard.js';
-
-/** Simple send payload: to, amount, fee as nicks strings (for sendTransaction). */
-export interface CanonicalSendPayload {
-  to: string;
-  amount: string;
-  fee?: string;
-}
-
-/**
- * Normalize simple send input: amount/fee to nicks strings.
- */
-export function normalizeSendTransaction(transaction: Transaction): CanonicalSendPayload {
-  const amount = parseNicksLike(transaction.amount, 'amount');
-  const fee = transaction.fee === undefined ? undefined : parseNicksLike(transaction.fee, 'fee');
-
-  return {
-    to: transaction.to,
-    amount,
-    ...(fee !== undefined ? { fee } : {}),
-  };
-}
+  Digest,
+} from './wasm.js';
+import { PROVIDER_METHODS, RPC_API_VERSION, DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS } from './constants.js';
 
 /** Protobuf signRawTx payload (gRPC wire format). Only format supported at API boundary. */
-export interface LegacySignRawTxRequest {
+interface LegacySignRawTxRequest {
   /** Raw transaction protobuf */
   rawTx: PbCom2RawTransaction;
   /** Input notes (protobuf) */
@@ -44,21 +32,8 @@ export interface LegacySignRawTxRequest {
   spendConditions: PbCom2SpendCondition[];
 }
 
-/** Params for signRawTx. Protobuf only for now (native RawTx not supported at RPC boundary. */
-export type SignRawTxParams = LegacySignRawTxRequest;
-
-/** Native signRawTx payload (RawTx, Note[], SpendCondition[]). Used internally after protobuf conversion. */
-export interface NativeSignRawTxRequest {
-  /** Raw transaction (native) */
-  rawTx: RawTx;
-  /** Input notes (native) */
-  notes: Note[];
-  /** Spend conditions (native) */
-  spendConditions: SpendCondition[];
-}
-
 /** Type guard: validates protobuf signRawTx payload. Use at API boundary (SDK + extension). */
-export function isLegacySignRawTxRequest(obj: unknown): obj is LegacySignRawTxRequest {
+function isLegacySignRawTxRequest(obj: unknown): obj is LegacySignRawTxRequest {
   if (!obj || typeof obj !== 'object') return false;
   const p = obj as { rawTx?: unknown; notes?: unknown; spendConditions?: unknown };
   return (
@@ -72,60 +47,248 @@ export function isLegacySignRawTxRequest(obj: unknown): obj is LegacySignRawTxRe
   );
 }
 
-/** Type guard: validates native signRawTx payload. Use internally after protobuf→native conversion. */
-export function isNativeSignRawTxPayload(obj: unknown): obj is NativeSignRawTxRequest {
-  if (!obj || typeof obj !== 'object') return false;
-  const p = obj as { rawTx?: unknown; notes?: unknown; spendConditions?: unknown };
-  return (
-    guard.isRawTx(p.rawTx) &&
-    Array.isArray(p.notes) &&
-    p.notes.length > 0 &&
-    p.notes.every((n: unknown) => guard.isNote(n)) &&
-    Array.isArray(p.spendConditions) &&
-    p.spendConditions.length > 0 &&
-    p.spendConditions.every((sc: unknown) => guard.isSpendCondition(sc))
-  );
+interface LegacyConnectResponse {
+  grpcEndpoint: string;
+  pkh: Digest;
 }
 
-function assertIntegerString(value: string, field: 'amount' | 'fee'): string {
-  const trimmed = value.trim();
-  if (!/^-?\d+$/.test(trimmed)) {
-    throw new Error(`Invalid ${field}: expected an integer-like value`);
-  }
-  return trimmed;
+interface LegacySignMessageResponse {
+  signature: string;
+  publicKeyHex: string
 }
 
-/**
- * Parse legacy number/bigint/string nicks into canonical string format.
- */
-export function parseNicksLike(value: NicksLike, field: 'amount' | 'fee'): string {
-  if (typeof value === 'bigint') {
-    return value.toString();
-  }
+/** Map an RPC request from one API version to another. */
+function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcRequest {
+  if (fromApi === toApi) return request;
 
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value) || !Number.isInteger(value)) {
-      throw new Error(`Invalid ${field}: expected a finite integer number`);
+  const fromV1 = fromApi === RPC_API_VERSION;
+  const toV1 = toApi === RPC_API_VERSION;
+
+  switch (request.method) {
+    case PROVIDER_METHODS.CONNECT: {
+      if (fromV1 && !toV1) {
+        // API 1 → legacy: { api: string } → []
+        return { ...request, params: [] };
+      }
+      if (!fromV1 && toV1) {
+        // legacy → API 1: [] → { api: string }
+        const connectParams: ConnectRequest = { api: RPC_API_VERSION };
+        return { ...request, params: connectParams as unknown };
+      }
+      return request;
     }
-    return String(value);
+    case PROVIDER_METHODS.SEND_TRANSACTION: {
+      if (fromV1 && !toV1) {
+        return { ...request, params: [request.params] };
+      }
+      if (!fromV1 && toV1) {
+        const params = request.params as unknown as unknown[] | undefined;
+        return { ...request, params: params?.[0] };
+      }
+      return request;
+    }
+    case PROVIDER_METHODS.SIGN_MESSAGE: {
+      if (fromV1 && !toV1) {
+        // API 1 → legacy: { message: string } → [message]
+        const params = request.params as unknown as SignMessageRequest | undefined;
+        return { ...request, params: params?.message ? [params.message] : request.params };
+      }
+      if (!fromV1 && toV1) {
+        // legacy → API 1: [message] → { message: string }
+        const legacyParams = request.params as unknown as unknown[] | undefined;
+        const message = legacyParams?.[0] as string | undefined;
+        if (message) {
+          const signParams: SignMessageRequest = { message };
+          return { ...request, params: signParams as unknown };
+        }
+      }
+      return request;
+    }
+    case PROVIDER_METHODS.GET_WALLET_INFO: {
+      return request;
+    }
+    case "nock_signRawTx": {
+      if (fromV1) {
+        throw new Error('signRawTx not implemented for API 1');
+      }
+      if (toV1) {
+        const req = (request as any).params?.[0];
+        if (!isLegacySignRawTxRequest(req)) {
+          throw new Error('Invalid legacyRawTx');
+        }
+        const rawTx = rawTxFromProtobuf(req.rawTx);
+        if (!guard.isRawTxV1(rawTx)) {
+          throw new Error('Only V1 Raw TXs are supported at the moment');
+        }
+        const tx = rawTxV1ToNockchainTx(rawTx);
+        const signParams = { tx };
+        return { ...request, method: PROVIDER_METHODS.SIGN_TX, params: signParams as unknown };
+      }
+      return request;
+    }
+    case PROVIDER_METHODS.SIGN_TX: {
+      if (!fromV1) {
+        throw new Error('signTx not implemented for API 0');
+      }
+      if (!toV1) {
+        const req = request.params as unknown as SignTxRequest;
+        const rawTx = nockchainTxToRawTx(req.tx);
+        if (!req.notes) {
+          throw new Error('notes not found in SignTxRequest. This is required for API 0 wallets.');
+        }
+        const notesNative = req.notes;
+        const notes = notesNative.map((note) => noteToProtobuf(note));
+        const spendConditionsNative = rawTxInputSpendConditions(rawTx);
+        const spendConditions = spendConditionsNative.map((spendCondition: SpendCondition) => spendConditionToProtobuf(spendCondition));
+        const legacyReq = { rawTx, notes, spendConditions };
+        return { ...request, method: "nock_signRawTx", params: [legacyReq] };
+      }
+      return request;
+    }
+    default:
+      return request;
   }
+}
 
-  if (typeof value === 'string') {
-    return assertIntegerString(value, field);
+/** Map an RPC response from one API version to another. */
+function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: string, toApi?: string): RpcResponse<unknown> {
+  if (fromApi === toApi) return response;
+  if (response.error) return response;
+
+  const fromV1 = fromApi === RPC_API_VERSION;
+  const toV1 = toApi === RPC_API_VERSION;
+
+  switch (method) {
+    case PROVIDER_METHODS.CONNECT: {
+      if (!fromV1 && toV1) {
+        // legacy → API 1: { grpcEndpoint, pkh } → { account, rpcConfig }
+        const legacy = response.result as LegacyConnectResponse;
+        const result: ConnectResponse = {
+          account: { type: 'v1', address: legacy.pkh },
+          rpcConfig: {
+            rpcUrl: legacy.grpcEndpoint,
+            networkName: 'mainnet',
+            blockExplorerUrl: '',
+            txEngineActivationHeights: DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS,
+            coinbaseTimelockBlocks: 100,
+          },
+        };
+        return { ...response, result };
+      }
+      if (fromV1 && !toV1) {
+        // API 1 → legacy: { account, rpcConfig } → { grpcEndpoint, pkh }
+        const v1 = response.result as ConnectResponse;
+        if (v1.account.type !== 'v1') {
+          throw new Error('Invalid account type');
+        }
+        const result: LegacyConnectResponse = {
+          grpcEndpoint: v1.rpcConfig.rpcUrl,
+          pkh: v1.account.address,
+        };
+        return { ...response, result };
+      }
+      return response;
+    }
+    case PROVIDER_METHODS.SIGN_MESSAGE: {
+      if (!fromV1 && toV1) {
+        // legacy → API 1: { signature, publicKeyHex } → { signature, publicKey }
+        const legacy = response.result as LegacySignMessageResponse;
+        const signature = JSON.parse(legacy.signature) as { c: number[]; s: number[] };
+
+        const fromLegacyHex = (bytes: number[]): string => {
+          return bytes.reverse().map((b) => b.toString(16).padStart(2, '0')).join('');
+        };
+        const publicKey = publicKeyFromHex(legacy.publicKeyHex);
+        if (!publicKey) {
+          throw new Error('Invalid public key');
+        }
+        const result: SignMessageResponse = {
+          signature: {
+            c: fromLegacyHex(signature.c),
+            s: fromLegacyHex(signature.s),
+          },
+          publicKey,
+        };
+        return { ...response, result };
+      }
+      if (fromV1 && !toV1) {
+        // API 1 → legacy: { signature, publicKey } → { signature, publicKeyHex }
+        const v1 = response.result as SignMessageResponse;
+
+        const toLegacyHex = (v: string | Uint8Array): number[] => {
+          if (typeof v === 'string') {
+            let bytes = [];
+            for (let i = 0; i < v.length; i += 2) {
+              bytes.push(parseInt(v.substr(i, 2), 16));
+            }
+            return bytes.reverse();
+          }
+          return [...v];
+        };
+        const signatureJson = JSON.stringify({
+          c: toLegacyHex(v1.signature.c),
+          s: toLegacyHex(v1.signature.s),
+        });
+
+        const result: LegacySignMessageResponse = {
+          signature: signatureJson,
+          publicKeyHex: publicKeyToHex(v1.publicKey),
+        };
+        return { ...response, result };
+      }
+      return response;
+    }
+    case "nock_signRawTx": {
+      if (!fromV1) {
+        throw new Error('signRawTx not implemented for API 0');
+      }
+      if (toV1) {
+        const req = response.result as any;
+        const rawTx = rawTxFromProtobuf(req.rawTx) as RawTxV1;
+        const nockchainTx = rawTxV1ToNockchainTx(rawTx);
+        const result: SignTxResponse = { tx: nockchainTx };
+        return { ...response, result };
+      }
+      return response;
+    }
+    case PROVIDER_METHODS.SIGN_TX: {
+      if (fromV1) {
+        throw new Error('signRawTx not implemented for API 1');
+      }
+      if (!toV1) {
+        const req = (response as any).result?.[0];
+        if (!isLegacySignRawTxRequest(req)) {
+          throw new Error('Invalid legacyRawTx');
+        }
+        const rawTx = rawTxFromProtobuf(req.rawTx);
+        if (!guard.isRawTxV1(rawTx)) {
+          throw new Error('Only V1 Raw TXs are supported at the moment');
+        }
+        const tx = rawTxV1ToNockchainTx(rawTx);
+        const result = { tx };
+        return { ...response, result };
+      }
+      return response;
+    }
+    default:
+      return response;
   }
-
-  throw new Error(`Invalid ${field}: unsupported value type`);
 }
 
 /**
- * Validate signRawTx params. Input must be protobuf (LegacySignRawTxRequest).
- * RPC sends only LegacySignRawTxRequest. Native (SignRawTxRequest) not supported.
+ * Bridge RPC requests between two API versions, converting request params
+ * and response payloads as needed.
+ *
+ * Maps the request from sourceApi → targetApi, calls target, then maps
+ * the response back from targetApi → sourceApi (inverted).
  */
-export function normalizeSignRawTxParams(params: SignRawTxParams): SignRawTxParams {
-  if (!isLegacySignRawTxRequest(params)) {
-    throw new Error(
-      'Invalid signRawTx params: expected protobuf (PbCom2RawTransaction, PbCom2Note[], PbCom2SpendCondition[])'
-    );
-  }
-  return params;
+export async function requestBridge<Req, Res>(
+  request: RpcRequest<Req>,
+  target: (request: RpcRequest) => Promise<RpcResponse<unknown>>,
+  sourceApi?: string,
+  targetApi?: string,
+): Promise<RpcResponse<Res>> {
+  const mappedReq = mapRequest(request, sourceApi, targetApi);
+  const res = await target(mappedReq);
+  return mapResponse(mappedReq.method, res, targetApi, sourceApi) as RpcResponse<Res>;
 }

@@ -10,12 +10,13 @@ import type {
   PbCom2BalanceEntry,
   RawTxV1,
   SpendCondition,
+  Digest,
   TxEngineSettings,
 } from '@nockbox/iris-wasm/iris_wasm.js';
 import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
 
-function buildSinglePkhSpendCondition(pkh: string): SpendCondition {
+function buildSinglePkhSpendCondition(pkh: Digest): SpendCondition {
   const pkhObj = wasm.pkhSingle(pkh);
   return wasm.spendConditionNewPkh(pkhObj);
 }
@@ -28,9 +29,9 @@ function isNoteV0(note: Note): note is NoteV0 {
   return 'inner' in note && 'sig' in note && 'source' in note;
 }
 
-function sumNicks(notes: NoteV0[]): string {
+function sumNicks(notes: NoteV0[]): Nicks {
   const total = notes.reduce((acc, note) => acc + BigInt(note.assets), 0n);
-  return total.toString();
+  return total.toString() as Nicks;
 }
 
 const NOCK_TO_NICKS = 65_536;
@@ -105,7 +106,7 @@ function defaultTxEngineSettings(): TxEngineSettings {
 export async function buildV0MigrationTx(
   mnemonic: string,
   grpcEndpoint: string,
-  targetV1Pkh?: string,
+  targetV1Pkh?: Digest,
   options?: { debug?: boolean }
 ): Promise<BuildV0MigrationTxResult> {
   const balanceResult = await queryV0Balance(mnemonic, grpcEndpoint);
@@ -133,7 +134,7 @@ export async function buildV0MigrationTx(
 
     const txSettings = defaultTxEngineSettings();
     const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
-    const refundLock = wasm.locky(targetSpendCondition);
+    const refundLock = wasm.lockHash(targetSpendCondition);
     const builder = new wasm.TxBuilder(txSettings);
 
     for (const note of notesToUse) {
@@ -145,14 +146,9 @@ export async function buildV0MigrationTx(
     builder.recalcAndSetFee(false);
     const feeNicks = builder.curFee();
     const transaction = builder.build();
-    const allNotes = builder.allNotes();
-    const rawTx: RawTxV1 = {
-      version: 1,
-      id: transaction.id,
-      spends: transaction.spends,
-    };
+    const rawTx: RawTxV1 = wasm.nockchainTxToRawTx(transaction);
 
-    const inputNotes = allNotes.filter((note): note is NoteV0 => isNoteV0(note));
+    const inputNotes = notesToUse;
     const feeNock = Number(BigInt(feeNicks)) / NOCK_TO_NICKS;
 
     const migrated = useSingleNote
@@ -160,12 +156,12 @@ export async function buildV0MigrationTx(
           const note = notesToUse[0];
           const nock = Number(BigInt(note.assets)) / NOCK_TO_NICKS;
           return {
-            migratedNicks: BigInt(note.assets).toString(),
+            migratedNicks: note.assets,
             migratedNock: nock,
           };
         })()
       : {
-          migratedNicks: (BigInt(balanceResult.totalNicks) - BigInt(feeNicks)).toString(),
+          migratedNicks: (BigInt(balanceResult.totalNicks) - BigInt(feeNicks)).toString() as Nicks,
           migratedNock: balanceResult.totalNock - feeNock,
         };
 

@@ -12,13 +12,16 @@ import type {
 } from './bridge-types.js';
 import type {
   LockRoot,
+  Digest,
   Note,
   NoteData,
+  Nicks,
   Noun,
   PbCom2RawTransaction,
   SeedV1,
   SpendCondition,
 } from '@nockbox/iris-wasm/iris_wasm.js';
+import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
 
 // Goldilocks prime: 2^64 - 2^32 + 1
@@ -113,6 +116,15 @@ export function isBridgeConfigured(config: BridgeConfig): boolean {
   );
 }
 
+function parseDigestString(value: string, field: string): Digest {
+  const trimmed = value.trim();
+  const bytes = base58.decode(trimmed);
+  if (bytes.length !== 40) {
+    throw new Error(`Invalid ${field}: expected a 40-byte base58 digest`);
+  }
+  return trimmed as Digest;
+}
+
 /**
  * Create jammed bridge note data for an EVM address (requires WASM).
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
@@ -143,17 +155,20 @@ export async function buildBridgeTransaction(
   const bridgeNounJs = buildBridgeNoun(params.destinationAddress, config);
   const noteData: NoteData = [[config.noteDataKey, bridgeNounJs as Noun]];
 
-  const bridgePkh = wasm.pkhNew(BigInt(config.threshold), config.addresses);
+  const bridgePkh = wasm.pkhNew(
+    BigInt(config.threshold),
+    config.addresses.map(address => parseDigestString(address, 'bridge address'))
+  );
   const bridgeSpendCondition: SpendCondition = wasm.spendConditionNewPkh(bridgePkh);
   const bridgeLockRoot: LockRoot = bridgeSpendCondition;
-  const refundPkhObj = wasm.pkhSingle(params.refundPkh);
+  const refundPkhObj = wasm.pkhSingle(parseDigestString(params.refundPkh, 'refund pkh'));
   const refundLock: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
 
   const txSettings =
     params.txEngineSettings ?? {
       tx_engine_version: 1,
       tx_engine_patch: 0,
-      min_fee: '256',
+      min_fee: '256' as Nicks,
       cost_per_word: params.feeOverride ?? config.feePerWord,
       witness_word_div: 1,
     };
@@ -177,7 +192,7 @@ export async function buildBridgeTransaction(
         output_source: null,
         lock_root: bridgeLockRoot,
         note_data: noteData,
-        gift: String(giftPortion),
+        gift: giftPortion.toString() as Nicks,
         parent_hash: parentHash,
       };
       spendBuilder.seed(seed);
@@ -211,7 +226,7 @@ export async function validateBridgeTransaction(
 ): Promise<BridgeValidationResult> {
   try {
     const rawTx = wasm.rawTxFromProtobuf(rawTxProto as PbCom2RawTransaction);
-    const outputs = wasm.rawTxOutputs(rawTx);
+    const outputs = wasm.rawTxOutputs(rawTx, 0, wasm.txEngineSettingsV1BythosDefault());
 
     if (outputs.length === 0) {
       return { valid: false, error: 'Transaction has no outputs' };
@@ -358,7 +373,7 @@ export async function validateBridgeTransaction(
 
     return {
       valid: true,
-      bridgeAmountNicks: String(bridgeOutput.assets),
+      bridgeAmountNicks: bridgeOutput.assets.toString() as Nicks,
       destinationAddress,
       belts,
       noteDataKey: validatedNoteDataKey,

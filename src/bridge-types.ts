@@ -3,9 +3,15 @@
  * Consumers (nockswap, extension) provide BridgeConfig; the SDK handles tx construction and validation.
  */
 
-import type { NockchainTx, Nicks, Note, SpendCondition } from '@nockbox/iris-wasm/iris_wasm.js';
+import type {
+  NockchainTx,
+  Nicks,
+  Note,
+  SpendCondition,
+  TxEngineSettings,
+} from '@nockbox/iris-wasm/iris_wasm.js';
 
-export type { Nicks };
+export type { Nicks, TxEngineSettings };
 
 /**
  * Configuration for a specific bridge (e.g. Zorp Nock→Base).
@@ -28,15 +34,6 @@ export interface BridgeConfig {
   minAmountNicks: Nicks;
   /** Optional: expected lock root hash for bridge output (if set, validation checks it) */
   expectedLockRoot?: string;
-}
-
-/** Tx engine settings for TxBuilder (matches wasm.TxEngineSettings). */
-export interface TxEngineSettings {
-  tx_engine_version: 0 | 1 | 2;
-  tx_engine_patch: number;
-  min_fee: string;
-  cost_per_word: string;
-  witness_word_div: number;
 }
 
 /**

@@ -25,6 +25,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "build-example": "npm run build && tsc --project examples/tsconfig.json && vite build --config vite.config.examples.ts",
     "dev": "tsc --watch",
     "dev-example": "vite --config vite.config.examples.ts",

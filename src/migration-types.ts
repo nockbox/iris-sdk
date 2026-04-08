@@ -9,6 +9,7 @@ import type {
   PbCom2Balance,
   RawTx,
   SpendCondition,
+  TxEngineSettings,
 } from '@nockbox/iris-wasm/iris_wasm.js';
 
 export type { Nicks };
@@ -44,4 +45,10 @@ export interface BuildV0MigrationTxResult {
   };
   migratedNicks?: Nicks;
   migratedNock?: number;
+}
+
+export interface BuildV0MigrationTxOptions {
+  txEngineSettings: TxEngineSettings;
+  /** Optional cap on how many smallest legacy notes to include. */
+  maxNotes?: number;
 }

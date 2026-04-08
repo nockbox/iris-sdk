@@ -1,5 +1,6 @@
 import type {
   BuildV0MigrationTxResult,
+  BuildV0MigrationTxOptions,
   V0BalanceResult,
 } from './migration-types.js';
 import type {
@@ -10,7 +11,6 @@ import type {
   RawTxV1,
   SpendCondition,
   Digest,
-  TxEngineSettings,
 } from '@nockbox/iris-wasm/iris_wasm.js';
 import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
@@ -75,30 +75,28 @@ export async function queryV0Balance(
   };
 }
 
-function defaultTxEngineSettings(): TxEngineSettings {
-  return wasm.txEngineSettingsV1BythosDefault();
-}
-
 /**
  * Fetch v0 balance and optionally build migration tx to a v1 PKH lock.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  *
  * @param targetV1Pkh - When provided, builds the migration tx. Omit for balance only.
- * @param options.debug - When true, logs the built result to console.
+ * @param options.txEngineSettings - Required tx engine settings for deterministic tx building.
+ * @param options.maxNotes - Optional cap on number of smallest legacy notes to include.
  */
 export async function buildV0MigrationTx(
   sourcePublicKey: PublicKey,
   grpcEndpoint: string,
   targetV1Pkh?: Digest,
-  options?: { debug?: boolean }
+  options?: BuildV0MigrationTxOptions
 ): Promise<BuildV0MigrationTxResult> {
   const balanceResult = await queryV0Balance(sourcePublicKey, grpcEndpoint);
   if (!targetV1Pkh) {
     return balanceResult;
   }
-
-  const debug = options?.debug ?? false;
-  const useSingleNote = debug;
+  if (!options?.txEngineSettings) {
+    throw new Error('txEngineSettings is required when building migration tx');
+  }
+  const maxNotes = options.maxNotes;
 
   try {
     const v0Notes = balanceResult.v0Notes;
@@ -106,19 +104,18 @@ export async function buildV0MigrationTx(
       throw new Error('No v0 notes to migrate');
     }
 
-    const notesToUse: NoteV0[] = useSingleNote
-      ? (() => {
-          const sorted = [...v0Notes]
-            .map(n => ({ note: n, assets: BigInt(n.assets) }))
-            .sort((a, b) => (a.assets < b.assets ? -1 : a.assets > b.assets ? 1 : 0));
-          return [sorted[0].note];
-        })()
-      : v0Notes;
+    const sortedNotes = [...v0Notes]
+      .map(note => ({ note, assets: BigInt(note.assets) }))
+      .sort((a, b) => (a.assets < b.assets ? -1 : a.assets > b.assets ? 1 : 0));
 
-    const txSettings = defaultTxEngineSettings();
+    const notesToUse: NoteV0[] =
+      typeof maxNotes === 'number' && Number.isFinite(maxNotes) && maxNotes > 0
+        ? sortedNotes.slice(0, Math.floor(maxNotes)).map(entry => entry.note)
+        : sortedNotes.map(entry => entry.note);
+
     const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
     const refundLock = wasm.lockHash(targetSpendCondition);
-    const builder = new wasm.TxBuilder(txSettings);
+    const builder = new wasm.TxBuilder(options.txEngineSettings);
 
     for (const note of notesToUse) {
       const spendBuilder = new wasm.SpendBuilder(note, null, null, refundLock);
@@ -133,20 +130,9 @@ export async function buildV0MigrationTx(
 
     const inputNotes = notesToUse;
     const feeNock = Number(BigInt(feeNicks)) / NOCK_TO_NICKS;
-
-    const migrated = useSingleNote
-      ? (() => {
-          const note = notesToUse[0];
-          const nock = Number(BigInt(note.assets)) / NOCK_TO_NICKS;
-          return {
-            migratedNicks: note.assets,
-            migratedNock: nock,
-          };
-        })()
-      : {
-          migratedNicks: (BigInt(balanceResult.totalNicks) - BigInt(feeNicks)).toString() as Nicks,
-          migratedNock: balanceResult.totalNock - feeNock,
-        };
+    const selectedTotal = inputNotes.reduce((sum, note) => sum + BigInt(note.assets), 0n);
+    const migratedNicks = (selectedTotal - BigInt(feeNicks)).toString() as Nicks;
+    const migratedNock = Number(selectedTotal) / NOCK_TO_NICKS - feeNock;
 
     const result: BuildV0MigrationTxResult = {
       ...balanceResult,
@@ -159,12 +145,9 @@ export async function buildV0MigrationTx(
         spendConditions: inputNotes.map(() => null),
         refundLock,
       },
-      ...migrated,
+      migratedNicks,
+      migratedNock,
     };
-
-    if (debug) {
-      console.log('[SDK Migration] buildV0MigrationTx', result);
-    }
     return result;
   } catch (e) {
     console.warn('[SDK Migration] Build failed, returning balance only:', e);
@@ -173,6 +156,7 @@ export async function buildV0MigrationTx(
 }
 
 export type {
+  BuildV0MigrationTxOptions,
   BuildV0MigrationTxResult,
   V0BalanceResult,
 } from './migration-types.js';

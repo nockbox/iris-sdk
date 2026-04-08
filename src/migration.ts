@@ -4,10 +4,9 @@ import type {
   V0BalanceResult,
 } from './migration-types.js';
 import type {
-  Note,
   Nicks,
   NoteV0,
-  PbCom2BalanceEntry,
+  PbCom2Note,
   RawTxV1,
   SpendCondition,
   Digest,
@@ -15,6 +14,7 @@ import type {
 } from '@nockbox/iris-wasm/iris_wasm.js';
 import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
+import * as guard from '@nockbox/iris-wasm/iris_wasm.guard';
 import { NOCK_TO_NICKS } from './constants.js';
 
 function buildSinglePkhSpendCondition(pkh: Digest): SpendCondition {
@@ -22,27 +22,24 @@ function buildSinglePkhSpendCondition(pkh: Digest): SpendCondition {
   return wasm.spendConditionNewPkh(pkhObj);
 }
 
-function isLegacyEntry(entry: PbCom2BalanceEntry): boolean {
-  return !!entry.note?.note_version && 'Legacy' in entry.note.note_version;
-}
-
-function isNoteV0(note: Note): note is NoteV0 {
-  return 'inner' in note && 'sig' in note && 'source' in note;
-}
-
 function sumNicks(notes: NoteV0[]): Nicks {
   const total = notes.reduce((acc, note) => acc + BigInt(note.assets), 0n);
   return total.toString() as Nicks;
 }
 
+function parseV0Note(note?: PbCom2Note | null): NoteV0 | null {
+  if (!note) return null;
+  const parsed = wasm.noteFromProtobuf(note);
+  return guard.isNoteV0(parsed) ? parsed : null;
+}
+
 /**
- * Derive legacy v0 address (base58 bare public key) from mnemonic.
+ * Derive legacy v0 WASM public key from mnemonic.
  */
 export function deriveV0AddressFromMnemonic(mnemonic: string): DerivedV0Address {
   const master = wasm.deriveMasterKeyFromMnemonic(mnemonic);
   try {
-    const publicKey = Uint8Array.from(master.publicKey);
-    return base58.encode(publicKey);
+    return wasm.publicKeyFromBeBytes(Uint8Array.from(master.publicKey));
   } finally {
     master.free();
   }
@@ -56,28 +53,28 @@ export async function queryV0Balance(
   mnemonic: string,
   grpcEndpoint: string
 ): Promise<V0BalanceResult> {
-  const sourceAddress = deriveV0AddressFromMnemonic(mnemonic);
+  const sourcePublicKey = deriveV0AddressFromMnemonic(mnemonic);
+  const sourceAddress = base58.encode(wasm.publicKeyToBeBytesVec(sourcePublicKey));
   const grpcClient = new wasm.GrpcClient(grpcEndpoint);
   const balance = await grpcClient.getBalanceByAddress(sourceAddress);
 
   const v0Notes: NoteV0[] = [];
   const entries = balance.notes ?? [];
   for (const entry of entries) {
-    if (!isLegacyEntry(entry) || !entry.note) {
-      continue;
-    }
-    const parsed = wasm.noteFromProtobuf(entry.note);
-    if (isNoteV0(parsed)) {
-      v0Notes.push(parsed);
-    }
+    const parsedV0 = parseV0Note(entry.note);
+    if (parsedV0) v0Notes.push(parsedV0);
   }
 
   const totalNicks = sumNicks(v0Notes);
   const totalNock = Number(BigInt(totalNicks)) / NOCK_TO_NICKS;
   const smallestNoteNock =
     v0Notes.length > 0
-      ? Number(v0Notes.reduce((min, n) => (BigInt(n.assets) < min ? BigInt(n.assets) : min), BigInt(v0Notes[0].assets))) /
-        NOCK_TO_NICKS
+      ? Number(
+          v0Notes.reduce(
+            (min, n) => (BigInt(n.assets) < min ? BigInt(n.assets) : min),
+            BigInt(v0Notes[0].assets)
+          )
+        ) / NOCK_TO_NICKS
       : undefined;
 
   return {

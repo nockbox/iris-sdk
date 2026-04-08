@@ -6,6 +6,7 @@ import type {
   LockRoot,
   Nicks,
   NoteV0,
+  PublicKey,
   PbCom2Balance,
   RawTx,
   SpendCondition,
@@ -13,8 +14,8 @@ import type {
 
 export type { Nicks };
 
-/** Base58 bare public key derived from mnemonic. */
-export type DerivedV0Address = string;
+/** WASM public key bytes derived from mnemonic (legacy v0 key). */
+export type DerivedV0Address = PublicKey;
 
 /** Result of querying v0 balance. Use this to construct a migration transaction. */
 export interface V0BalanceResult {

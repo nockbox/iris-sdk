@@ -6,16 +6,12 @@ import type {
   LockRoot,
   Nicks,
   NoteV0,
-  PublicKey,
   PbCom2Balance,
   RawTx,
   SpendCondition,
 } from '@nockbox/iris-wasm/iris_wasm.js';
 
 export type { Nicks };
-
-/** WASM public key bytes derived from mnemonic (legacy v0 key). */
-export type DerivedV0Address = PublicKey;
 
 /** Result of querying v0 balance. Use this to construct a migration transaction. */
 export interface V0BalanceResult {

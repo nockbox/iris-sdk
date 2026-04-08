@@ -1,12 +1,12 @@
 import type {
   BuildV0MigrationTxResult,
-  DerivedV0Address,
   V0BalanceResult,
 } from './migration-types.js';
 import type {
   Nicks,
   NoteV0,
   PbCom2Note,
+  PublicKey,
   RawTxV1,
   SpendCondition,
   Digest,
@@ -34,26 +34,13 @@ function parseV0Note(note?: PbCom2Note | null): NoteV0 | null {
 }
 
 /**
- * Derive legacy v0 WASM public key from mnemonic.
- */
-export function deriveV0AddressFromMnemonic(mnemonic: string): DerivedV0Address {
-  const master = wasm.deriveMasterKeyFromMnemonic(mnemonic);
-  try {
-    return wasm.publicKeyFromBeBytes(Uint8Array.from(master.publicKey));
-  } finally {
-    master.free();
-  }
-}
-
-/**
- * Query v0 (Legacy) balance for a mnemonic. Discovery only; does not build a transaction.
+ * Query v0 (Legacy) balance for a v0 public key. Discovery only; does not build a transaction.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  */
 export async function queryV0Balance(
-  mnemonic: string,
+  sourcePublicKey: PublicKey,
   grpcEndpoint: string
 ): Promise<V0BalanceResult> {
-  const sourcePublicKey = deriveV0AddressFromMnemonic(mnemonic);
   const sourceAddress = base58.encode(wasm.publicKeyToBeBytesVec(sourcePublicKey));
   const grpcClient = new wasm.GrpcClient(grpcEndpoint);
   const balance = await grpcClient.getBalanceByAddress(sourceAddress);
@@ -100,12 +87,12 @@ function defaultTxEngineSettings(): TxEngineSettings {
  * @param options.debug - When true, logs the built result to console.
  */
 export async function buildV0MigrationTx(
-  mnemonic: string,
+  sourcePublicKey: PublicKey,
   grpcEndpoint: string,
   targetV1Pkh?: Digest,
   options?: { debug?: boolean }
 ): Promise<BuildV0MigrationTxResult> {
-  const balanceResult = await queryV0Balance(mnemonic, grpcEndpoint);
+  const balanceResult = await queryV0Balance(sourcePublicKey, grpcEndpoint);
   if (!targetV1Pkh) {
     return balanceResult;
   }
@@ -187,6 +174,5 @@ export async function buildV0MigrationTx(
 
 export type {
   BuildV0MigrationTxResult,
-  DerivedV0Address,
   V0BalanceResult,
 } from './migration-types.js';

@@ -1,5 +1,8 @@
 import { Nicks, TxEngineSettings } from '@nockbox/iris-wasm/iris_wasm';
 
+/** Conversion rate: 1 NOCK = 65,536 nicks (2^16). */
+export const NOCK_TO_NICKS = 65_536;
+
 /**
  * Provider method constants for Nockchain wallet
  * These methods can be called by dApps via window.nockchain

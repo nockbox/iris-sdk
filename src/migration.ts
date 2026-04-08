@@ -15,6 +15,7 @@ import type {
 } from '@nockbox/iris-wasm/iris_wasm.js';
 import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
+import { NOCK_TO_NICKS } from './constants.js';
 
 function buildSinglePkhSpendCondition(pkh: Digest): SpendCondition {
   const pkhObj = wasm.pkhSingle(pkh);
@@ -33,8 +34,6 @@ function sumNicks(notes: NoteV0[]): Nicks {
   const total = notes.reduce((acc, note) => acc + BigInt(note.assets), 0n);
   return total.toString() as Nicks;
 }
-
-const NOCK_TO_NICKS = 65_536;
 
 /**
  * Derive legacy v0 address (base58 bare public key) from mnemonic.

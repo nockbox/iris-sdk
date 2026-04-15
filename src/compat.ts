@@ -213,8 +213,21 @@ function mapResponse(
       }
       if (fromV1 && !toV1) {
         // API 1 → legacy: { account, rpcConfig } → { grpcEndpoint, pkh }
+        const raw = response.result;
+        if (raw && typeof raw === 'object') {
+          const r = raw as Record<string, unknown>;
+          // Extension may already return legacy `{ pkh, grpcEndpoint }` after internal
+          // handling; do not assume `account` exists (avoids reading undefined.type).
+          if (
+            typeof r.pkh === 'string' &&
+            typeof r.grpcEndpoint === 'string' &&
+            !('account' in r)
+          ) {
+            return response;
+          }
+        }
         const v1 = response.result as ConnectResponse;
-        if (v1.account.type !== 'v1') {
+        if (!v1?.account || v1.account.type !== 'v1') {
           throw new Error('Invalid account type');
         }
         const result: LegacyConnectResponse = {

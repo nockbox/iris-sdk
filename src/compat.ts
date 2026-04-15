@@ -10,6 +10,7 @@ import {
   rawTxFromProtobuf,
   rawTxV1ToNockchainTx,
   nockchainTxToRawTx,
+  rawTxToProtobuf,
   rawTxInputSpendConditions,
   publicKeyFromHex,
   publicKeyToHex,
@@ -155,6 +156,17 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
   }
 }
 
+/**
+ * Pure request mapper for callers that need request translation without invoking a target.
+ */
+export function mapRpcRequest(
+  request: RpcRequest,
+  sourceApi?: string,
+  targetApi?: string
+): RpcRequest {
+  return mapRequest(request, sourceApi, targetApi);
+}
+
 /** Map an RPC response from one API version to another. */
 function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: string, toApi?: string): RpcResponse<unknown> {
   if (fromApi === toApi) return response;
@@ -244,12 +256,24 @@ function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: s
       return response;
     }
     case "nock_signRawTx": {
-      if (!fromV1) {
-        throw new Error('signRawTx not implemented for API 0');
+      if (fromV1 && !toV1) {
+        const v1 = response.result as SignTxResponse;
+        if (!v1?.tx) {
+          throw new Error('Invalid signTx response');
+        }
+        const rawTx = nockchainTxToRawTx(v1.tx);
+        if (!guard.isRawTxV1(rawTx)) {
+          throw new Error('Only V1 Raw TXs are supported at the moment');
+        }
+        const result = { rawTx: rawTxToProtobuf(rawTx) };
+        return { ...response, result };
       }
-      if (toV1) {
-        const req = response.result as any;
-        const rawTx = rawTxFromProtobuf(req.rawTx) as RawTxV1;
+      if (!fromV1 && toV1) {
+        const legacy = response.result as { rawTx?: PbCom2RawTransaction };
+        if (!legacy?.rawTx || !guard.isPbCom2RawTransaction(legacy.rawTx)) {
+          throw new Error('Invalid legacy signRawTx response');
+        }
+        const rawTx = rawTxFromProtobuf(legacy.rawTx) as RawTxV1;
         const nockchainTx = rawTxV1ToNockchainTx(rawTx);
         const result: SignTxResponse = { tx: nockchainTx };
         return { ...response, result };
@@ -257,15 +281,24 @@ function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: s
       return response;
     }
     case PROVIDER_METHODS.SIGN_TX: {
-      if (fromV1) {
-        throw new Error('signRawTx not implemented for API 1');
-      }
-      if (!toV1) {
-        const req = (response as any).result?.[0];
-        if (!isLegacySignRawTxRequest(req)) {
-          throw new Error('Invalid legacyRawTx');
+      if (fromV1 && !toV1) {
+        const v1 = response.result as SignTxResponse;
+        if (!v1?.tx) {
+          throw new Error('Invalid signTx response');
         }
-        const rawTx = rawTxFromProtobuf(req.rawTx);
+        const rawTx = nockchainTxToRawTx(v1.tx);
+        if (!guard.isRawTxV1(rawTx)) {
+          throw new Error('Only V1 Raw TXs are supported at the moment');
+        }
+        const result = { rawTx: rawTxToProtobuf(rawTx) };
+        return { ...response, result };
+      }
+      if (!fromV1 && toV1) {
+        const legacy = response.result as { rawTx?: PbCom2RawTransaction };
+        if (!legacy?.rawTx || !guard.isPbCom2RawTransaction(legacy.rawTx)) {
+          throw new Error('Invalid legacy signRawTx response');
+        }
+        const rawTx = rawTxFromProtobuf(legacy.rawTx);
         if (!guard.isRawTxV1(rawTx)) {
           throw new Error('Only V1 Raw TXs are supported at the moment');
         }
@@ -281,6 +314,20 @@ function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: s
 }
 
 /**
+ * Pure response mapper for callers that already executed a mapped request.
+ *
+ * `method` should be the method of the mapped request that produced `response`.
+ */
+export function mapRpcResponse(
+  method: string,
+  response: RpcResponse<unknown>,
+  sourceApi?: string,
+  targetApi?: string
+): RpcResponse<unknown> {
+  return mapResponse(method, response, sourceApi, targetApi);
+}
+
+/**
  * Bridge RPC requests between two API versions, converting request params
  * and response payloads as needed.
  *
@@ -293,7 +340,7 @@ export async function requestBridge<Req, Res>(
   sourceApi?: string,
   targetApi?: string,
 ): Promise<RpcResponse<Res>> {
-  const mappedReq = mapRequest(request, sourceApi, targetApi);
+  const mappedReq = mapRpcRequest(request, sourceApi, targetApi);
   const res = await target(mappedReq);
-  return mapResponse(mappedReq.method, res, targetApi, sourceApi) as RpcResponse<Res>;
+  return mapRpcResponse(mappedReq.method, res, targetApi, sourceApi) as RpcResponse<Res>;
 }

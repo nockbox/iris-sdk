@@ -15,6 +15,8 @@ export type NicksLike = number | Nicks | bigint;
 export interface RpcRequest<T = unknown> {
   /** The RPC method to call */
   method: string;
+  /** API version of this request payload (defaults to legacy API 0 when omitted) */
+  api?: string;
   /** Optional parameters for the method */
   params?: T;
   /** Optional timeout for the request */
@@ -36,8 +38,8 @@ export interface RpcResponse<T = unknown> {
 }
 
 export interface ConnectRequest {
-  /** SDK will pass its RPC_API_VERSION */
-  api: string;
+  /** @deprecated API version now lives on RpcRequest.api */
+  api?: string;
 }
 
 export interface RpcConfig {

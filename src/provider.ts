@@ -71,7 +71,6 @@ export class NockchainProvider {
   async connect(): Promise<ConnectResponse> {
     const info = await this.request<ConnectRequest, ConnectResponse>({
       method: PROVIDER_METHODS.CONNECT,
-      params: { api: RPC_API_VERSION },
     });
 
     // Store the PKH as the connected account
@@ -219,7 +218,10 @@ export class NockchainProvider {
    */
   public async request<Req, Res>(args: RpcRequest<Req>): Promise<Res> {
     try {
-      const result = await this.injected.request<Req, Res>(args);
+      const result = await this.injected.request<Req, Res>({
+        ...args,
+        api: args.api ?? RPC_API_VERSION,
+      });
       return result;
     } catch (error) {
       // Handle RPC errors and map known error codes

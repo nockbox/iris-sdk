@@ -22,17 +22,17 @@ import {
 } from './wasm.js';
 import { PROVIDER_METHODS, RPC_API_VERSION, DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS } from './constants.js';
 
-/** Protobuf signRawTx payload (gRPC wire format). Only format supported at API boundary. */
+/**
+ * Legacy `nock_signRawTx` RPC params (API 0): protobuf raw tx plus matching notes and spend conditions.
+ * Compat maps this to v1 `SIGN_TX` with a native `NockchainTx`. v1 callers use `SignTxRequest` instead.
+ */
 interface LegacySignRawTxRequest {
-  /** Raw transaction protobuf */
   rawTx: PbCom2RawTransaction;
-  /** Input notes (protobuf) */
   notes: PbCom2Note[];
-  /** Spend conditions (protobuf) */
   spendConditions: PbCom2SpendCondition[];
 }
 
-/** Type guard: validates protobuf signRawTx payload. Use at API boundary (SDK + extension). */
+/** Type guard for the legacy `nock_signRawTx` payload shape. */
 function isLegacySignRawTxRequest(obj: unknown): obj is LegacySignRawTxRequest {
   if (!obj || typeof obj !== 'object') return false;
   const p = obj as { rawTx?: unknown; notes?: unknown; spendConditions?: unknown };

@@ -2,7 +2,18 @@
  * Backward-compatibility helpers for SDK request payloads.
  */
 
-import type { SendTransactionRequest, NicksLike, RpcRequest, RpcResponse, ConnectRequest, ConnectResponse, SignMessageRequest, SignTxRequest, SignMessageResponse, SignTxResponse } from './types.js';
+import type {
+  SendTransactionRequest,
+  NicksLike,
+  RpcRequest,
+  RpcResponse,
+  ConnectRequest,
+  ConnectResponse,
+  SignMessageRequest,
+  SignTxRequest,
+  SignMessageResponse,
+  SignTxResponse,
+} from './types.js';
 import {
   PbCom2RawTransaction,
   PbCom2Note,
@@ -60,7 +71,7 @@ interface LegacyConnectResponse {
 
 interface LegacySignMessageResponse {
   signature: string;
-  publicKeyHex: string
+  publicKeyHex: string;
 }
 
 /** Map an RPC request from one API version to another. */
@@ -85,10 +96,11 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
     }
     case PROVIDER_METHODS.SEND_TRANSACTION: {
       if (fromV1 && !toV1) {
-        return { ...request, params: [request.params] };
+        const params = request.params as SendTransactionRequest | undefined;
+        return { ...request, params: params ? [params] : request.params };
       }
       if (!fromV1 && toV1) {
-        const params = request.params as unknown as unknown[] | undefined;
+        const params = request.params as SendTransactionRequest[] | undefined;
         return { ...request, params: params?.[0] };
       }
       return request;
@@ -113,7 +125,7 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
     case PROVIDER_METHODS.GET_WALLET_INFO: {
       return request;
     }
-    case "nock_signRawTx": {
+    case 'nock_signRawTx': {
       if (fromV1) {
         throw new Error('signRawTx not implemented for API 1');
       }
@@ -143,11 +155,13 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
           throw new Error('notes not found in SignTxRequest. This is required for API 0 wallets.');
         }
         const notesNative = req.notes;
-        const notes = notesNative.map((note) => noteToProtobuf(note));
+        const notes = notesNative.map(note => noteToProtobuf(note));
         const spendConditionsNative = rawTxInputSpendConditions(rawTx);
-        const spendConditions = spendConditionsNative.map((spendCondition: SpendCondition) => spendConditionToProtobuf(spendCondition));
+        const spendConditions = spendConditionsNative.map((spendCondition: SpendCondition) =>
+          spendConditionToProtobuf(spendCondition)
+        );
         const legacyReq = { rawTx, notes, spendConditions };
-        return { ...request, method: "nock_signRawTx", params: [legacyReq] };
+        return { ...request, method: 'nock_signRawTx', params: [legacyReq] };
       }
       return request;
     }
@@ -168,7 +182,12 @@ export function mapRpcRequest(
 }
 
 /** Map an RPC response from one API version to another. */
-function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: string, toApi?: string): RpcResponse<unknown> {
+function mapResponse(
+  method: string,
+  response: RpcResponse<unknown>,
+  fromApi?: string,
+  toApi?: string
+): RpcResponse<unknown> {
   if (fromApi === toApi) return response;
   if (response.error) return response;
 
@@ -213,7 +232,10 @@ function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: s
         const signature = JSON.parse(legacy.signature) as { c: number[]; s: number[] };
 
         const fromLegacyHex = (bytes: number[]): string => {
-          return bytes.reverse().map((b) => b.toString(16).padStart(2, '0')).join('');
+          return bytes
+            .reverse()
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
         };
         const publicKey = publicKeyFromHex(legacy.publicKeyHex);
         if (!publicKey) {
@@ -255,7 +277,7 @@ function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: s
       }
       return response;
     }
-    case "nock_signRawTx": {
+    case 'nock_signRawTx': {
       if (fromV1 && !toV1) {
         const v1 = response.result as SignTxResponse;
         if (!v1?.tx) {
@@ -338,7 +360,7 @@ export async function requestBridge<Req, Res>(
   request: RpcRequest<Req>,
   target: (request: RpcRequest) => Promise<RpcResponse<unknown>>,
   sourceApi?: string,
-  targetApi?: string,
+  targetApi?: string
 ): Promise<RpcResponse<Res>> {
   const mappedReq = mapRpcRequest(request, sourceApi, targetApi);
   const res = await target(mappedReq);

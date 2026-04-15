@@ -144,7 +144,12 @@ export async function buildV0MigrationTx(
     const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
     const refundLock = wasm.lockHash(targetSpendCondition);
     const builder = new wasm.TxBuilder(options.txEngineSettings);
-    appendV0MigrationSpends(builder, notesToUse, notesToUse.map(() => null), refundLock);
+    appendV0MigrationSpends(
+      builder,
+      notesToUse,
+      notesToUse.map(() => null),
+      refundLock
+    );
 
     builder.recalcAndSetFee(false);
     const feeNicks = builder.curFee();

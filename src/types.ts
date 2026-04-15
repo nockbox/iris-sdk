@@ -48,7 +48,7 @@ export interface RpcConfig {
   blockExplorerUrl: string;
   txEngineActivationHeights: Record<number, TxEngineSettings>;
   coinbaseTimelockBlocks: number;
-};
+}
 
 export interface ConnectResponse {
   account: Account;
@@ -56,12 +56,12 @@ export interface ConnectResponse {
 }
 
 export interface V0Account {
-  type: "v0";
+  type: 'v0';
   address: PublicKey;
 }
 
 export interface V1Account {
-  type: "v1";
+  type: 'v1';
   address: Digest;
 }
 

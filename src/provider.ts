@@ -2,7 +2,20 @@
  * NockchainProvider - Main SDK class for interacting with Iris wallet
  */
 
-import type { Account, ConnectResponse, NockchainEvent, EventListener, InjectedNockchain, SignTxResponse, RpcRequest, SignTxRequest, SignMessageRequest, SignMessageResponse, ConnectRequest, SendTransactionRequest } from './types.js';
+import type {
+  Account,
+  ConnectResponse,
+  NockchainEvent,
+  EventListener,
+  InjectedNockchain,
+  SignTxResponse,
+  RpcRequest,
+  SignTxRequest,
+  SignMessageRequest,
+  SignMessageResponse,
+  ConnectRequest,
+  SendTransactionRequest,
+} from './types.js';
 import { WalletNotInstalledError, UserRejectedError, RpcError, NoAccountError } from './errors.js';
 import { PROVIDER_METHODS, RPC_API_VERSION } from './constants.js';
 import { NockchainTx, Note } from '@nockbox/iris-wasm';

@@ -7,7 +7,6 @@ import {
   PbCom2RawTransaction,
   PbCom2Note,
   PbCom2SpendCondition,
-  guard,
   rawTxFromProtobuf,
   rawTxV1ToNockchainTx,
   nockchainTxToRawTx,
@@ -20,7 +19,13 @@ import {
   SpendCondition,
   Digest,
 } from './wasm.js';
-import { PROVIDER_METHODS, RPC_API_VERSION, DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS } from './constants.js';
+import * as guard from '@nockbox/iris-wasm/iris_wasm.guard';
+import {
+  PROVIDER_METHODS,
+  RPC_API_VERSION,
+  DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS,
+  DEFAULT_COINBASE_TIMELOCK_BLOCKS,
+} from './constants.js';
 
 /**
  * Legacy `nock_signRawTx` RPC params (API 0): protobuf raw tx plus matching notes and spend conditions.
@@ -170,7 +175,7 @@ function mapResponse(method: string, response: RpcResponse<unknown>, fromApi?: s
             networkName: 'mainnet',
             blockExplorerUrl: '',
             txEngineActivationHeights: DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS,
-            coinbaseTimelockBlocks: 100,
+            coinbaseTimelockBlocks: DEFAULT_COINBASE_TIMELOCK_BLOCKS,
           },
         };
         return { ...response, result };

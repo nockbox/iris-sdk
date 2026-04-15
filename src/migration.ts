@@ -2,6 +2,7 @@ import type {
   BuildV0MigrationTxResult,
   BuildV0MigrationTxOptions,
   V0BalanceResult,
+  V0MigrationTxSignPayload,
 } from './migration-types.js';
 import type {
   Nicks,
@@ -11,6 +12,9 @@ import type {
   RawTxV1,
   SpendCondition,
   Digest,
+  Lock,
+  LockRoot,
+  TxEngineSettings,
 } from '@nockbox/iris-wasm/iris_wasm.js';
 import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
@@ -31,6 +35,37 @@ function parseV0Note(note?: PbCom2Note | null): NoteV0 | null {
   if (!note) return null;
   const parsed = wasm.noteFromProtobuf(note);
   return guard.isNoteV0(parsed) ? parsed : null;
+}
+
+function appendV0MigrationSpends(
+  builder: wasm.TxBuilder,
+  notes: NoteV0[],
+  spendConditions: (SpendCondition | null)[] | undefined,
+  refundLock: LockRoot
+): void {
+  for (let i = 0; i < notes.length; i++) {
+    const spendBuilder = new wasm.SpendBuilder(
+      notes[i],
+      (spendConditions?.[i] ?? null) as Lock | null,
+      null,
+      refundLock
+    );
+    spendBuilder.computeRefund(false);
+    builder.spend(spendBuilder);
+  }
+}
+
+/**
+ * Reconstruct a `TxBuilder` from {@link BuildV0MigrationTxResult.v0MigrationTxSignPayload},
+ * using the same `txEngineSettings` that were used to build the unsigned tx (e.g. for fee iteration / signing).
+ */
+export function buildV0MigrationTxBuilderFromPayload(
+  payload: V0MigrationTxSignPayload,
+  txEngineSettings: TxEngineSettings
+): wasm.TxBuilder {
+  const builder = new wasm.TxBuilder(txEngineSettings);
+  appendV0MigrationSpends(builder, payload.notes, payload.spendConditions, payload.refundLock);
+  return builder;
 }
 
 /**
@@ -116,12 +151,7 @@ export async function buildV0MigrationTx(
     const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
     const refundLock = wasm.lockHash(targetSpendCondition);
     const builder = new wasm.TxBuilder(options.txEngineSettings);
-
-    for (const note of notesToUse) {
-      const spendBuilder = new wasm.SpendBuilder(note, null, null, refundLock);
-      spendBuilder.computeRefund(false);
-      builder.spend(spendBuilder);
-    }
+    appendV0MigrationSpends(builder, notesToUse, notesToUse.map(() => null), refundLock);
 
     builder.recalcAndSetFee(false);
     const feeNicks = builder.curFee();
@@ -139,7 +169,7 @@ export async function buildV0MigrationTx(
       txId: transaction.id,
       fee: feeNicks,
       feeNock,
-      signRawTxPayload: {
+      v0MigrationTxSignPayload: {
         rawTx,
         notes: inputNotes,
         spendConditions: inputNotes.map(() => null),
@@ -159,4 +189,5 @@ export type {
   BuildV0MigrationTxOptions,
   BuildV0MigrationTxResult,
   V0BalanceResult,
+  V0MigrationTxSignPayload,
 } from './migration-types.js';

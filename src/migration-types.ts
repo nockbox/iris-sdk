@@ -25,6 +25,16 @@ export interface V0BalanceResult {
   rawNotesFromRpc?: number;
 }
 
+/**
+ * Data needed to reconstruct a v0→v1 migration `TxBuilder` for signing (distinct from dApp `signRawTx` APIs).
+ */
+export interface V0MigrationTxSignPayload {
+  rawTx: RawTx;
+  notes: NoteV0[];
+  spendConditions: (SpendCondition | null)[];
+  refundLock: LockRoot;
+}
+
 /** buildV0MigrationTx result: balance fields always present; tx fields when target provided and build succeeded. */
 export interface BuildV0MigrationTxResult {
   sourceAddress: string;
@@ -37,12 +47,7 @@ export interface BuildV0MigrationTxResult {
   txId?: string;
   fee?: Nicks;
   feeNock?: number;
-  signRawTxPayload?: {
-    rawTx: RawTx;
-    notes: NoteV0[];
-    spendConditions: (SpendCondition | null)[];
-    refundLock: LockRoot;
-  };
+  v0MigrationTxSignPayload?: V0MigrationTxSignPayload;
   migratedNicks?: Nicks;
   migratedNock?: number;
 }

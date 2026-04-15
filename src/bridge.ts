@@ -12,6 +12,7 @@ import type {
   BuildBridgeTransactionOptions,
 } from './bridge-types.js';
 import type {
+  Lock,
   LockRoot,
   Digest,
   Note,
@@ -117,6 +118,15 @@ export function isBridgeConfigured(config: BridgeConfig): boolean {
   );
 }
 
+function logBridgeDebug(
+  options: BuildBridgeTransactionOptions | undefined,
+  label: string,
+  payload: Record<string, unknown>
+): void {
+  if (options?.debug !== true) return;
+  console.log(`[SDK Bridge] ${label}:`, payload);
+}
+
 function parseDigestString(value: string, field: string): Digest {
   const trimmed = value.trim();
   const bytes = base58.decode(trimmed);
@@ -156,6 +166,18 @@ export async function buildBridgeTransaction(
   if (!isEvmAddress(params.destinationAddress)) {
     throw new Error(`Invalid destination address: ${params.destinationAddress}`);
   }
+  if (params.inputNotes.length !== params.spendConditions.length) {
+    throw new Error(
+      `Input note/spend condition length mismatch: ${params.inputNotes.length} notes vs ${params.spendConditions.length} conditions`
+    );
+  }
+
+  logBridgeDebug(options, 'Build start', {
+    destinationAddress: params.destinationAddress,
+    amountInNicks: params.amountInNicks,
+    inputCount: params.inputNotes.length,
+    refundPkh: params.refundPkh,
+  });
 
   const bridgeNounJs = buildBridgeNoun(params.destinationAddress, config);
   const noteData: NoteData = [[config.noteDataKey, bridgeNounJs as Noun]];
@@ -176,12 +198,35 @@ export async function buildBridgeTransaction(
   for (let i = 0; i < params.inputNotes.length; i++) {
     const note = params.inputNotes[i];
     const spendCondition = params.spendConditions[i];
+    if (!spendCondition) {
+      logBridgeDebug(options, 'Missing spend condition', {
+        inputIndex: i,
+        noteAssets: note.assets,
+      });
+      throw new Error('Spend condition is missing for this input note');
+    }
     const noteAssets = BigInt(note.assets ?? 0);
 
     const giftPortion = remainingGift < noteAssets ? remainingGift : noteAssets;
     remainingGift -= giftPortion;
 
-    const spendBuilder = new wasm.SpendBuilder(note, spendCondition, null, refundLock);
+    // V1 inputs require a lock + spend-condition index. Single-lock spends use index 0.
+    let spendBuilder: InstanceType<typeof wasm.SpendBuilder>;
+    try {
+      spendBuilder = new wasm.SpendBuilder(
+        note,
+        spendCondition as unknown as Lock,
+        0,
+        refundLock as unknown as LockRoot
+      );
+    } catch (error) {
+      logBridgeDebug(options, 'SpendBuilder creation failed', {
+        inputIndex: i,
+        noteAssets: note.assets,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
 
     if (giftPortion > 0n) {
       const parentHash = wasm.noteHash(note);
@@ -197,6 +242,13 @@ export async function buildBridgeTransaction(
 
     spendBuilder.computeRefund(false);
     builder.spend(spendBuilder);
+
+    logBridgeDebug(options, 'Input processed', {
+      inputIndex: i,
+      noteAssetsNicks: noteAssets.toString(),
+      giftPortionNicks: giftPortion.toString(),
+      remainingGiftNicks: remainingGift.toString(),
+    });
   }
 
   builder.recalcAndSetFee(false);
@@ -205,6 +257,12 @@ export async function buildBridgeTransaction(
 
   const txId = transaction.id;
   const fee = feeResult;
+
+  logBridgeDebug(options, 'Build complete', {
+    txId,
+    feeNicks: fee,
+    remainingGiftNicks: remainingGift.toString(),
+  });
 
   return {
     transaction,
@@ -228,6 +286,10 @@ export async function validateBridgeTransaction(
   try {
     const rawTx = wasm.rawTxFromProtobuf(rawTxProto as PbCom2RawTransaction);
     const outputs = wasm.rawTxOutputs(rawTx, 0, options.txEngineSettings);
+    logBridgeDebug(options, 'Validate start', {
+      outputCount: outputs.length,
+      noteDataKey: config.noteDataKey,
+    });
 
     if (outputs.length === 0) {
       return { valid: false, error: 'Transaction has no outputs' };
@@ -382,6 +444,9 @@ export async function validateBridgeTransaction(
       chain: validatedChain,
     };
   } catch (err) {
+    logBridgeDebug(options, 'Validate failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return {
       valid: false,
       error: `Transaction validation failed: ${err instanceof Error ? err.message : String(err)}`,

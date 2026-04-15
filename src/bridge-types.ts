@@ -28,8 +28,6 @@ export interface BridgeConfig {
   chainTag: string;
   /** Version tag in note data (e.g. "0") */
   versionTag: string;
-  /** Fee per word in nicks (WASM Nicks = string, e.g. "32768") */
-  feePerWord: Nicks;
   /** Minimum amount in nicks for a valid bridge output (for validation) */
   minAmountNicks: Nicks;
   /** Optional: expected lock root hash for bridge output (if set, validation checks it) */

@@ -110,11 +110,41 @@ function nicksToNock(nicks: wasm.Nicks): number {
 }
 
 function nockToNicks(nock: number): wasm.Nicks {
-  return String(BigInt(Math.floor(nock * 65536)));
+  return asNicks(String(BigInt(Math.floor(nock * 65536))));
 }
 
 function formatNock(nock: number): string {
   return nock.toFixed(4);
+}
+
+function asDigest(value: string): wasm.Digest {
+  return value as wasm.Digest;
+}
+
+function asNicks(value: string): wasm.Nicks {
+  return value as wasm.Nicks;
+}
+
+function asBlockHeight(value: number): wasm.BlockHeight {
+  return value as wasm.BlockHeight;
+}
+
+function asLock(spendCondition: wasm.SpendCondition): wasm.Lock {
+  return spendCondition as unknown as wasm.Lock;
+}
+
+function asTxLock(spendCondition: wasm.SpendCondition): wasm.TxLock {
+  return spendCondition as unknown as wasm.TxLock;
+}
+
+function getTxEngineSettings(): wasm.TxEngineSettings {
+  return {
+    tx_engine_version: 1,
+    tx_engine_patch: 0,
+    min_fee: asNicks('256'),
+    cost_per_word: asNicks('32768'),
+    witness_word_div: 1,
+  };
 }
 
 declare global {
@@ -227,8 +257,8 @@ connectBtn.onclick = async () => {
 
   try {
     const info = await state.provider.connect();
-    state.grpcEndpoint = info.grpcEndpoint;
-    state.walletPkh = info.pkh;
+    state.grpcEndpoint = info.rpcConfig.rpcUrl;
+    state.walletPkh = info.account.address;
     state.connected = true;
 
     connectBtn.textContent = truncateAddress(state.walletPkh);
@@ -255,7 +285,11 @@ function createDefaultLocksWithPkh() {
 
   if (!pkhDefaultExists) {
     // Simple 1-of-1 PKH lock
-    const pkhPrim: wasm.LockPrimitive = { Pkh: { m: 1, hashes: [state.walletPkh] } };
+    const pkhPrim: wasm.LockPrimitive = {
+      tag: 'pkh',
+      m: 1,
+      hashes: [asDigest(state.walletPkh)],
+    };
     const spendCondition: wasm.SpendCondition = [pkhPrim];
     state.locks.push({
       id: 'pkh-default',
@@ -267,12 +301,16 @@ function createDefaultLocksWithPkh() {
 
   if (!coinbaseDefaultExists) {
     // Coinbase lock (PKH + timelock)
-    const pkhPrim: wasm.LockPrimitive = { Pkh: { m: 1, hashes: [state.walletPkh] } };
+    const pkhPrim: wasm.LockPrimitive = {
+      tag: 'pkh',
+      m: 1,
+      hashes: [asDigest(state.walletPkh)],
+    };
     const coinbaseTim: wasm.LockTim = {
-      rel: { min: 100, max: null },
+      rel: { min: asBlockHeight(100), max: null },
       abs: { min: null, max: null },
     };
-    const timPrim: wasm.LockPrimitive = { Tim: coinbaseTim };
+    const timPrim: wasm.LockPrimitive = { tag: 'tim', ...coinbaseTim };
     const spendCondition: wasm.SpendCondition = [pkhPrim, timPrim];
     state.locks.push({
       id: 'coinbase-default',
@@ -344,7 +382,7 @@ async function refreshNotesForLock(lockId: string) {
       .filter((note): note is wasm.PbCom2Note => note != null)
       .map((noteProto: wasm.PbCom2Note) => {
         const note = wasm.noteFromProtobuf(noteProto);
-        const assets = note.assets != null ? String(note.assets) : '0';
+        const assets = note.assets ?? asNicks('0');
         const firstNameStr = note.name?.first ?? '';
         const lastNameStr = note.name?.last ?? '';
         return {
@@ -424,7 +462,7 @@ function addInputToSpend(lockId: string, noteIndex: number) {
   const spend: Spend = {
     inputId: input.id,
     input,
-    fee: '0',
+    fee: asNicks('0'),
     seeds: [],
   };
 
@@ -507,10 +545,10 @@ function getSpendBalanceText(spend: Spend): string {
     BigInt(spend.fee) + spend.seeds.reduce((sum, seed) => sum + BigInt(seed.amount), BigInt(0));
   const diff = BigInt(spend.input.note.assets) - total;
   if (diff === BigInt(0)) {
-    return `✓ Balanced (${formatNock(nicksToNock(String(total)))} NOCK)`;
+    return `✓ Balanced (${formatNock(nicksToNock(asNicks(String(total))))} NOCK)`;
   }
   const sign = diff > 0n ? '+' : '';
-  return `${sign}${formatNock(nicksToNock(String(diff)))} NOCK`;
+  return `${sign}${formatNock(nicksToNock(asNicks(String(diff))))} NOCK`;
 }
 
 function removeSpend(inputId: string) {
@@ -553,7 +591,7 @@ function balanceSeed(inputId: string, seedIndex: number) {
     return;
   }
 
-  seed.amount = String(remaining);
+  seed.amount = asNicks(String(remaining));
   renderSpends();
   updateBuilder();
 }
@@ -567,7 +605,7 @@ function updateSpendFee(inputId: string, feeStr: string, shouldRender: boolean =
       if (!isNaN(nock) && nock >= 0) {
         spend.fee = nockToNicks(nock);
       } else {
-        spend.fee = '0';
+        spend.fee = asNicks('0');
       }
       if (shouldRender) renderSpends();
       updateBuilder();
@@ -582,7 +620,7 @@ function addSeed(inputId: string) {
   if (spend && state.locks.length > 0) {
     spend.seeds.push({
       lockId: state.locks[0].id,
-      amount: '0',
+      amount: asNicks('0'),
     });
     renderSpends();
     updateBuilder();
@@ -612,7 +650,7 @@ function updateSeedAmount(
       if (!isNaN(nock) && nock >= 0) {
         spend.seeds[seedIndex].amount = nockToNicks(nock);
       } else {
-        spend.seeds[seedIndex].amount = '0';
+        spend.seeds[seedIndex].amount = asNicks('0');
       }
       if (shouldRender) renderSpends();
       updateBuilder();
@@ -651,28 +689,23 @@ function updateBuilder() {
   try {
     console.log('Building transaction...');
 
-    const txSettings: wasm.TxEngineSettings = {
-      tx_engine_version: 1,
-      tx_engine_patch: 0,
-      min_fee: '256',
-      cost_per_word: '32768',
-      witness_word_div: 1,
-    };
-    const builder = new wasm.TxBuilder(txSettings);
+    const builder = new wasm.TxBuilder(getTxEngineSettings());
 
     for (const spend of state.spends) {
       const lock = state.locks.find(l => l.id === spend.input.lockId);
       if (!lock) continue;
 
-      const refundLock: wasm.SpendCondition | null =
+      const refundLock: wasm.LockRoot | null =
         spend.seeds.length > 0
-          ? (state.locks.find(l => l.id === spend.seeds[0].lockId)?.spendCondition ?? null)
+          ? ((state.locks.find(l => l.id === spend.seeds[0].lockId)?.spendCondition ??
+              null) as wasm.SpendCondition | null)
           : lock.spendCondition;
 
       const spendBuilder = new wasm.SpendBuilder(
         spend.input.note.note,
-        lock.spendCondition,
-        refundLock
+        asLock(lock.spendCondition),
+        null,
+        refundLock ? asLock(refundLock) : null
       );
 
       for (const seed of spend.seeds) {
@@ -680,7 +713,7 @@ function updateBuilder() {
         if (seedLock) {
           const seedV1: wasm.SeedV1 = {
             output_source: null,
-            lock_root: { Lock: seedLock.spendCondition },
+            lock_root: asLock(seedLock.spendCondition),
             note_data: [],
             gift: seed.amount,
             parent_hash: wasm.noteHash(spend.input.note.note),
@@ -943,10 +976,10 @@ function renderTransaction() {
     txInfo.innerHTML = `
       <div style="background: #262626; padding: 0.75rem; border-radius: 0.375rem; font-size: 0.875rem">
         <div style="margin-bottom: 0.5rem">
-          <span style="color: #9ca3af">Fee:</span> <span style="font-weight: 600">${formatNock(nicksToNock(String(fee)))} NOCK</span>
+          <span style="color: #9ca3af">Fee:</span> <span style="font-weight: 600">${formatNock(nicksToNock(feeStr))} NOCK</span>
         </div>
         <div style="margin-bottom: 0.5rem">
-          <span style="color: #9ca3af">Calculated Fee:</span> <span>${formatNock(nicksToNock(String(calcFee)))} NOCK</span>
+          <span style="color: #9ca3af">Calculated Fee:</span> <span>${formatNock(nicksToNock(calcFeeStr))} NOCK</span>
         </div>
         <div>
           <span style="color: #9ca3af">TX ID:</span> ${renderCopyableId(state.nockchainTx.id, 'TX ID')}
@@ -956,17 +989,17 @@ function renderTransaction() {
 
     // Outputs: 0.2 use nockchainTxToRawTx + rawTxOutputs (maybe doesn't work)
     const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx);
-    const outputs = wasm.rawTxOutputs(rawTx);
+    const outputs = wasm.rawTxOutputs(rawTx, 0, getTxEngineSettings());
     if (outputs && outputs.length > 0) {
       outputsList.innerHTML = outputs
         .map((output: wasm.Note, index: number) => {
-          const amount = output.assets != null ? BigInt(output.assets) : BigInt(0);
+          const amount = output.assets ?? asNicks('0');
           const firstName = output.name?.first ?? '';
           const lastName = output.name?.last ?? '';
           return `
           <div class="output-item">
             <div style="font-weight: 600; margin-bottom: 0.25rem">
-              Output ${index + 1}: ${formatNock(nicksToNock(String(amount)))} NOCK
+              Output ${index + 1}: ${formatNock(nicksToNock(amount))} NOCK
             </div>
             <div style="font-size: 0.75rem; color: #9ca3af">
               ${firstName ? renderNoteName(firstName, lastName) : 'Unknown'}
@@ -1410,25 +1443,27 @@ function confirmAddLock() {
             alert('PKH requires at least one address');
             return;
           }
-          primitives.push({ Pkh: { m: pkhConfig.m, hashes: validAddrs } });
+          primitives.push({
+            tag: 'pkh',
+            m: pkhConfig.m,
+            hashes: validAddrs.map(addr => asDigest(addr)),
+          });
           break;
         }
         case 'tim': {
           const timConfig = prim.tim || { type: 'csv', value: 1 };
-          const value = timConfig.value ?? 0;
+          const value = asBlockHeight(timConfig.value ?? 0);
           if (timConfig.type === 'csv') {
             primitives.push({
-              Tim: {
-                rel: { min: value, max: null },
-                abs: { min: null, max: null },
-              },
+              tag: 'tim',
+              rel: { min: value, max: null },
+              abs: { min: null, max: null },
             });
           } else {
             primitives.push({
-              Tim: {
-                rel: { min: null, max: null },
-                abs: { min: value, max: null },
-              },
+              tag: 'tim',
+              rel: { min: null, max: null },
+              abs: { min: value, max: null },
             });
           }
           break;
@@ -1440,11 +1475,11 @@ function confirmAddLock() {
             alert('HAX requires at least one hash.');
             return;
           }
-          primitives.push({ Hax: validHashes });
+          primitives.push({ tag: 'hax', preimages: validHashes.map(hash => asDigest(hash)) });
           break;
         }
         case 'brn':
-          primitives.push('Brn');
+          primitives.push({ tag: 'brn' });
           break;
       }
     }
@@ -1591,44 +1626,15 @@ signTxBtn.onclick = async () => {
   if (!state.nockchainTx || !state.builder || !state.provider) return;
 
   try {
-    const txNotes = state.builder.allNotes();
-    const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx) as wasm.RawTxV1;
-    const rawTxProto = wasm.rawTxToProtobuf(rawTx);
-    const notesProto = txNotes.notes.map((n: wasm.Note) => wasm.noteToProtobuf(n));
-    const spendCondProto = txNotes.spend_conditions.map((sc: wasm.SpendCondition) =>
-      wasm.spendConditionToProtobuf(sc)
-    );
-
-    const signedTxProtobuf = await state.provider.signRawTx({
-      rawTx: rawTxProto,
-      notes: notesProto,
-      spendConditions: spendCondProto,
-    });
-
-    const signedTxProtoObj =
-      typeof signedTxProtobuf === 'object' && !(signedTxProtobuf instanceof Uint8Array)
-        ? signedTxProtobuf
-        : (signedTxProtobuf as unknown as wasm.PbCom2RawTransaction);
-    const signedRawTx = wasm.rawTxFromProtobuf(signedTxProtoObj) as wasm.RawTxV1;
-    state.signedTx = wasm.rawTxV1ToNockchainTx(signedRawTx);
+    const signed = await state.provider.signTx(state.nockchainTx);
+    const signedRawTx = wasm.nockchainTxToRawTx(signed.tx) as wasm.RawTxV1;
+    state.signedTx = signed.tx;
 
     let isValid = true;
     let validationError = '';
 
     try {
-      const txSettings: wasm.TxEngineSettings = {
-        tx_engine_version: 1,
-        tx_engine_patch: 0,
-        min_fee: '256',
-        cost_per_word: '32768',
-        witness_word_div: 1,
-      };
-      const signedBuilder = wasm.TxBuilder.fromTx(
-        signedRawTx,
-        txNotes.notes,
-        txNotes.spend_conditions,
-        txSettings
-      );
+      const signedBuilder = wasm.TxBuilder.fromNockchainTx(signed.tx, getTxEngineSettings());
       signedBuilder.validate();
       signedBuilder.free();
       console.log('Signed transaction validated successfully');

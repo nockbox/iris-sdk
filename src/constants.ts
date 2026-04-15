@@ -63,6 +63,25 @@ export const DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS: Record<number, TxEngineSettin
   54000: BYTHOS_TX_ENGINE_SETTINGS,
 };
 
+/**
+ * Pick the latest tx engine from an activation-height map.
+ * Falls back to the SDK's default activation map when none is provided.
+ */
+export function getLatestTxEngineSettings(
+  activationHeights: Record<number, TxEngineSettings> = DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS
+): TxEngineSettings {
+  const heights = Object.keys(activationHeights)
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+
+  if (heights.length === 0) {
+    return BYTHOS_TX_ENGINE_SETTINGS;
+  }
+
+  return activationHeights[heights[heights.length - 1]];
+}
+
 /** Default coinbase maturity in blocks (mainnet-style; e.g. 100). */
 export const DEFAULT_COINBASE_TIMELOCK_BLOCKS = 100;
 

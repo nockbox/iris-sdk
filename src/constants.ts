@@ -54,11 +54,14 @@ export const BYTHOS_TX_ENGINE_SETTINGS: TxEngineSettings = {
   witness_word_div: 4,
 };
 
+/**
+ * Default mainnet activation map
+ */
 export const DEFAULT_TX_ENGINE_ACTIVATION_HEIGHTS: Record<number, TxEngineSettings> = {
   1: V0_TX_ENGINE_SETTINGS,
   39000: V1_TX_ENGINE_SETTINGS,
   54000: BYTHOS_TX_ENGINE_SETTINGS,
 };
 
-/** Default coinbase timelock (mainnet maturity) */
-const DEFAULT_COINBASE_TIMELOCK_BLOCKS = 100;
+/** Default coinbase maturity in blocks (mainnet-style; e.g. 100). */
+export const DEFAULT_COINBASE_TIMELOCK_BLOCKS = 100;

@@ -111,26 +111,19 @@ export async function queryV0Balance(
 }
 
 /**
- * Fetch v0 balance and optionally build migration tx to a v1 PKH lock.
+ * Build a v0→v1 migration transaction to `targetV1Pkh` (after querying balance on-chain).
+ * For balance only, use {@link queryV0Balance}.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  *
- * @param targetV1Pkh - When provided, builds the migration tx. Omit for balance only.
- * @param options.txEngineSettings - Required tx engine settings for deterministic tx building.
  * @param options.maxNotes - Optional cap on number of smallest legacy notes to include.
  */
 export async function buildV0MigrationTx(
   sourcePublicKey: PublicKey,
   grpcEndpoint: string,
-  targetV1Pkh?: Digest,
-  options?: BuildV0MigrationTxOptions
+  targetV1Pkh: Digest,
+  options: BuildV0MigrationTxOptions
 ): Promise<BuildV0MigrationTxResult> {
   const balanceResult = await queryV0Balance(sourcePublicKey, grpcEndpoint);
-  if (!targetV1Pkh) {
-    return balanceResult;
-  }
-  if (!options?.txEngineSettings) {
-    throw new Error('txEngineSettings is required when building migration tx');
-  }
   const maxNotes = options.maxNotes;
 
   try {

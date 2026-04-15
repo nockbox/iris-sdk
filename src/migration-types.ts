@@ -35,7 +35,7 @@ export interface V0MigrationTxSignPayload {
   refundLock: LockRoot;
 }
 
-/** buildV0MigrationTx result: balance fields always present; tx fields when target provided and build succeeded. */
+/** buildV0MigrationTx result: balance fields always present; tx fields when build succeeded. */
 export interface BuildV0MigrationTxResult {
   sourceAddress: string;
   balance: PbCom2Balance;

@@ -9,6 +9,7 @@ import type {
   BridgeTransactionParams,
   BridgeTransactionResult,
   BridgeValidationResult,
+  BuildBridgeTransactionOptions,
 } from './bridge-types.js';
 import type {
   LockRoot,
@@ -143,10 +144,14 @@ export async function createBridgeNoteData(
  */
 export async function buildBridgeTransaction(
   params: BridgeTransactionParams,
-  config: BridgeConfig
+  config: BridgeConfig,
+  options: BuildBridgeTransactionOptions
 ): Promise<BridgeTransactionResult> {
   if (!isBridgeConfigured(config)) {
     throw new Error('Bridge not configured');
+  }
+  if (!options?.txEngineSettings) {
+    throw new Error('txEngineSettings is required in options (see BuildBridgeTransactionOptions)');
   }
   if (!isEvmAddress(params.destinationAddress)) {
     throw new Error(`Invalid destination address: ${params.destinationAddress}`);
@@ -164,15 +169,7 @@ export async function buildBridgeTransaction(
   const refundPkhObj = wasm.pkhSingle(parseDigestString(params.refundPkh, 'refund pkh'));
   const refundLock: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
 
-  const txSettings =
-    params.txEngineSettings ?? {
-      tx_engine_version: 1,
-      tx_engine_patch: 0,
-      min_fee: '256' as Nicks,
-      cost_per_word: params.feeOverride ?? config.feePerWord,
-      witness_word_div: 1,
-    };
-  const builder = new wasm.TxBuilder(txSettings);
+  const builder = new wasm.TxBuilder(options.txEngineSettings);
 
   let remainingGift = BigInt(params.amountInNicks);
 
@@ -222,11 +219,15 @@ export async function buildBridgeTransaction(
  */
 export async function validateBridgeTransaction(
   rawTxProto: unknown,
-  config: BridgeConfig
+  config: BridgeConfig,
+  options: BuildBridgeTransactionOptions
 ): Promise<BridgeValidationResult> {
+  if (!options?.txEngineSettings) {
+    throw new Error('txEngineSettings is required in options (see BuildBridgeTransactionOptions)');
+  }
   try {
     const rawTx = wasm.rawTxFromProtobuf(rawTxProto as PbCom2RawTransaction);
-    const outputs = wasm.rawTxOutputs(rawTx, 0, wasm.txEngineSettingsV1BythosDefault());
+    const outputs = wasm.rawTxOutputs(rawTx, 0, options.txEngineSettings);
 
     if (outputs.length === 0) {
       return { valid: false, error: 'Transaction has no outputs' };
@@ -394,9 +395,10 @@ export async function validateBridgeTransaction(
 export async function assertValidBridgeTransaction(
   rawTxProto: unknown,
   context: 'pre-signing' | 'post-signing',
-  config: BridgeConfig
+  config: BridgeConfig,
+  options: BuildBridgeTransactionOptions
 ): Promise<BridgeValidationResult> {
-  const result = await validateBridgeTransaction(rawTxProto, config);
+  const result = await validateBridgeTransaction(rawTxProto, config, options);
   if (!result.valid) {
     throw new Error(`${context} validation failed: ${result.error}`);
   }
@@ -409,5 +411,6 @@ export type {
   BridgeTransactionParams,
   BridgeTransactionResult,
   BridgeValidationResult,
+  BuildBridgeTransactionOptions,
   TxEngineSettings,
 } from './bridge-types.js';

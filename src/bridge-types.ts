@@ -51,10 +51,13 @@ export interface BridgeTransactionParams {
   destinationAddress: string;
   /** User's PKH for refunds/change */
   refundPkh: string;
-  /** Optional fee override in nicks */
-  feeOverride?: Nicks;
-  /** Optional: tx engine settings (Bythos at block ≥54000). When provided, overrides config.feePerWord. */
-  txEngineSettings?: TxEngineSettings;
+}
+
+/**
+ * Options for bridge transaction build / validation (mirrors migration: caller supplies tx engine).
+ */
+export interface BuildBridgeTransactionOptions {
+  txEngineSettings: TxEngineSettings;
 }
 
 /**

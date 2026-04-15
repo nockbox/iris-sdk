@@ -187,9 +187,10 @@ export async function buildBridgeTransaction(
     config.addresses.map(address => parseDigestString(address, 'bridge address'))
   );
   const bridgeSpendCondition: SpendCondition = wasm.spendConditionNewPkh(bridgePkh);
-  const bridgeLockRoot: LockRoot = bridgeSpendCondition;
+  const bridgeLockRoot: LockRoot = wasm.lockFromList([bridgeSpendCondition]);
   const refundPkhObj = wasm.pkhSingle(parseDigestString(params.refundPkh, 'refund pkh'));
-  const refundLock: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
+  const refundSpendCondition: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
+  const refundLockRoot: LockRoot = wasm.lockFromList([refundSpendCondition]);
 
   const builder = new wasm.TxBuilder(options.txEngineSettings);
 
@@ -210,14 +211,16 @@ export async function buildBridgeTransaction(
     const giftPortion = remainingGift < noteAssets ? remainingGift : noteAssets;
     remainingGift -= giftPortion;
 
-    // V1 inputs require a lock + spend-condition index. Single-lock spends use index 0.
+    // V1 inputs require a lock + spend-condition index.
+    // Convert the discovered spend condition into a single-leaf lock for this input.
     let spendBuilder: InstanceType<typeof wasm.SpendBuilder>;
     try {
+      const inputLock = wasm.lockFromList([spendCondition]);
       spendBuilder = new wasm.SpendBuilder(
         note,
-        spendCondition as unknown as Lock,
+        inputLock,
         0,
-        refundLock as unknown as LockRoot
+        refundLockRoot
       );
     } catch (error) {
       logBridgeDebug(options, 'SpendBuilder creation failed', {

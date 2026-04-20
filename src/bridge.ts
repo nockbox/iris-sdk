@@ -19,6 +19,8 @@ import type {
   NoteData,
   Nicks,
   Noun,
+  PbCom2Note,
+  PbCom2NoteDataEntry,
   PbCom2RawTransaction,
   SeedV1,
   SpendCondition,
@@ -81,17 +83,20 @@ export function bigintToAtom(n: bigint): string {
 
 /**
  * Build the bridge noun structure for an EVM address.
- * Structure: [versionTag [chainTag [belt1 [belt2 belt3]]]]
+ *
+ * Shape: `[version [chain [belt1 [belt2 belt3]]]]` — a chain of right-nested
+ * pairs with five hex-encoded atom leaves, matching the Hoon cell stored in
+ * the on-chain bridge note.
  */
 export function buildBridgeNoun(
   evmAddress: string,
   config: Pick<BridgeConfig, 'chainTag' | 'versionTag'>
-): unknown {
+): Noun {
   const [belt1, belt2, belt3] = evmAddressToBelts(evmAddress);
   return [
     config.versionTag,
     [config.chainTag, [bigintToAtom(belt1), [bigintToAtom(belt2), bigintToAtom(belt3)]]],
-  ];
+  ] as unknown as Noun;
 }
 
 /**
@@ -127,6 +132,50 @@ function logBridgeDebug(
   console.log(`[SDK Bridge] ${label}:`, payload);
 }
 
+// TODO(iris-wasm): `isAtom` and `readPair` are adapters for `Noun`'s runtime
+// shape, not bridge logic. They should live alongside `cue`/`jam` in
+// `iris-wasm` (ideally replaced by a proper `nounToJs` that returns nested
+// pairs). Keep them here until that package exposes an equivalent.
+
+/**
+ * Type guard: is this noun an atom (a leaf, represented as a hex string)?
+ *
+ * After this returns `true` TypeScript narrows the noun to `string`, so
+ * callers can use the value directly without a separate rebinding.
+ */
+function isAtom(noun: Noun | undefined): noun is string {
+  return typeof noun === 'string';
+}
+
+/**
+ * Read one `[head, tail]` pair out of a noun.
+ *
+ * A noun is either an atom (string) or a pair of nouns. On-chain the bridge
+ * note is stored as a chain of right-nested pairs: `[v [c [b1 [b2 b3]]]]`.
+ *
+ * The wasm we use here returns that nested structure to JS in a *flattened*
+ * form: instead of `["v", ["c", ["b1", ["b2", "b3"]]]]` we receive
+ * `["v", "c", "b1", "b2", "b3"]`. Same data, same pairing intent, just
+ * collapsed by the serializer on the way across the JS boundary.
+ *
+ * To read it back as logical pairs we treat the flat array as
+ * `[head, ...tail]`: the first element is this pair's head, and everything
+ * after it is the tail (itself another noun). This function applies that
+ * convention once; call it repeatedly to walk the chain.
+ *
+ * Returns `null` if the noun is not a pair (e.g. an atom, or malformed).
+ */
+function readPair(noun: Noun | undefined): [Noun, Noun] | null {
+  // The wasm `Noun` type is declared as `string | [Noun]`, but at runtime a
+  // pair arrives as a flat array of length >= 2. Re-narrow through `unknown`
+  // so we can inspect the real shape.
+  const arr = noun as unknown;
+  if (!Array.isArray(arr) || arr.length < 2) return null;
+  const head = arr[0] as Noun;
+  const tail = (arr.length === 2 ? arr[1] : arr.slice(1)) as Noun;
+  return [head, tail];
+}
+
 function parseDigestString(value: string, field: string): Digest {
   const trimmed = value.trim();
   const bytes = base58.decode(trimmed);
@@ -145,7 +194,7 @@ export async function createBridgeNoteData(
   config: BridgeConfig
 ): Promise<Uint8Array> {
   const nounJs = buildBridgeNoun(evmAddress, config);
-  return wasm.jam(nounJs as Noun);
+  return wasm.jam(nounJs);
 }
 
 /**
@@ -180,7 +229,7 @@ export async function buildBridgeTransaction(
   });
 
   const bridgeNounJs = buildBridgeNoun(params.destinationAddress, config);
-  const noteData: NoteData = [[config.noteDataKey, bridgeNounJs as Noun]];
+  const noteData: NoteData = [[config.noteDataKey, bridgeNounJs]];
 
   const bridgePkh = wasm.pkhNew(
     BigInt(config.threshold),
@@ -295,23 +344,22 @@ export async function validateBridgeTransaction(
       return { valid: false, error: 'Transaction has no outputs' };
     }
 
-    const outputData: Array<{
-      assets: bigint;
-      noteData: NoteData;
-    }> = outputs.map((output: Note) => {
-      const noteData = 'note_data' in output ? ((output.note_data as NoteData) ?? []) : [];
+    // Read each output via its protobuf form so the bridge note data is the raw
+    // jammed bytes (blob), not a serde-shaped JS value. 
+    const outputData = outputs.map((output: Note) => {
+      const proto = wasm.noteToProtobuf(output) as PbCom2Note;
+      const version = proto.note_version;
+      const v1 = version && 'V1' in version ? version.V1 : undefined;
+      const entries: PbCom2NoteDataEntry[] = v1?.note_data?.entries ?? [];
       return {
-        assets: BigInt(output.assets ?? 0),
-        noteData,
+        assets: BigInt(v1?.assets?.value ?? 0),
+        entries,
       };
     });
 
     let bridgeOutput: (typeof outputData)[0] | null = null;
     for (const output of outputData) {
-      const hasKey = output.noteData?.some(
-        (entry: [string, Noun]) => entry[0] === config.noteDataKey
-      );
-      if (hasKey) {
+      if (output.entries.some(e => e.key === config.noteDataKey)) {
         bridgeOutput = output;
         break;
       }
@@ -331,91 +379,76 @@ export async function validateBridgeTransaction(
       };
     }
 
-    if (!bridgeOutput.noteData?.length) {
-      return { valid: false, error: 'Bridge output missing note data' };
-    }
-
-    const bridgeEntryPair = bridgeOutput.noteData.find(
-      (entry: [string, Noun]) => entry[0] === config.noteDataKey
-    );
-    if (!bridgeEntryPair) {
+    const bridgeEntry = bridgeOutput.entries.find(e => e.key === config.noteDataKey);
+    if (!bridgeEntry) {
       return {
         valid: false,
         error: `Bridge output missing '${config.noteDataKey}' note data entry`,
       };
     }
-    const bridgeEntryValue = bridgeEntryPair[1];
 
     let destinationAddress: string | undefined;
     let belts: [bigint, bigint, bigint] | undefined;
     let validatedVersion: string | undefined;
     let validatedChain: string | undefined;
-    const validatedNoteDataKey = bridgeEntryPair[0];
+    const validatedNoteDataKey = bridgeEntry.key;
 
     try {
-      const value = bridgeEntryValue as unknown;
-      const decoded: unknown = Array.isArray(value)
-        ? value
-        : wasm.cue(
-            value instanceof Uint8Array ? value : new Uint8Array(value as unknown as number[])
-          );
+      // Deserialize the jammed blob into a noun, then walk it as a chain of
+      // right-nested pairs: [version [chain [belt1 [belt2 belt3]]]].
+      const noun = wasm.cue(new Uint8Array(bridgeEntry.blob));
 
-      if (!Array.isArray(decoded) || decoded.length !== 2) {
+      const versionPair = readPair(noun);
+      if (!versionPair) {
         return {
           valid: false,
           error: 'Invalid bridge note data structure: expected [version, [chain, belts]]',
         };
       }
-
-      const version = decoded[0];
-      if (version !== config.versionTag && version !== Number(config.versionTag)) {
+      const [version, chainAndBelts] = versionPair;
+      if (!isAtom(version)) {
+        return { valid: false, error: 'Invalid bridge note data: version is not an atom' };
+      }
+      if (version !== config.versionTag && version !== String(Number(config.versionTag))) {
         return {
           valid: false,
           error: `Invalid bridge note data version: expected ${config.versionTag}, got ${version}`,
         };
       }
-      validatedVersion = String(version);
+      validatedVersion = version;
 
-      const chainAndBelts = decoded[1];
-      if (!Array.isArray(chainAndBelts) || chainAndBelts.length !== 2) {
+      const chainPair = readPair(chainAndBelts);
+      if (!chainPair) {
+        return { valid: false, error: 'Invalid bridge note data: missing chain and belts' };
+      }
+      const [chain, beltData] = chainPair;
+      if (!isAtom(chain) || chain !== config.chainTag) {
         return {
           valid: false,
-          error: 'Invalid bridge note data: missing chain and belts',
+          error: `Invalid bridge chain: expected ${config.chainTag}, got ${String(chain)}`,
         };
       }
+      validatedChain = chain;
 
-      const chain = chainAndBelts[0];
-      if (String(chain) !== config.chainTag) {
-        return {
-          valid: false,
-          error: `Invalid bridge chain: expected ${config.chainTag}, got ${chain}`,
-        };
+      const belt1Pair = readPair(beltData);
+      if (!belt1Pair) {
+        return { valid: false, error: 'Invalid bridge note data: invalid belt structure' };
       }
-      validatedChain = String(chain);
+      const [belt1Noun, belt2And3] = belt1Pair;
 
-      const beltData = chainAndBelts[1];
-      if (!Array.isArray(beltData) || beltData.length !== 2) {
-        return {
-          valid: false,
-          error: 'Invalid bridge note data: invalid belt structure',
-        };
+      const belt2Pair = readPair(belt2And3);
+      if (!belt2Pair) {
+        return { valid: false, error: 'Invalid bridge note data: invalid belt2/belt3 structure' };
       }
+      const [belt2Noun, belt3Noun] = belt2Pair;
 
-      const belt1Hex = beltData[0];
-      const belt2And3 = beltData[1];
-      if (!Array.isArray(belt2And3) || belt2And3.length !== 2) {
-        return {
-          valid: false,
-          error: 'Invalid bridge note data: invalid belt2/belt3 structure',
-        };
+      if (!isAtom(belt1Noun) || !isAtom(belt2Noun) || !isAtom(belt3Noun)) {
+        return { valid: false, error: 'Invalid bridge note data: belt values are not atoms' };
       }
 
-      const belt2Hex = belt2And3[0];
-      const belt3Hex = belt2And3[1];
-
-      const belt1 = BigInt('0x' + belt1Hex);
-      const belt2 = BigInt('0x' + belt2Hex);
-      const belt3 = BigInt('0x' + belt3Hex);
+      const belt1 = BigInt('0x' + belt1Noun);
+      const belt2 = BigInt('0x' + belt2Noun);
+      const belt3 = BigInt('0x' + belt3Noun);
       belts = [belt1, belt2, belt3];
       destinationAddress = beltsToEvmAddress(belt1, belt2, belt3);
 

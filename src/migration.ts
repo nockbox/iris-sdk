@@ -45,6 +45,34 @@ function summarizeNote(note: NoteV0): { assetsNicks: string; assetsNock: number 
   };
 }
 
+/**
+ * Pick `count` notes in ascending value order. Prefer notes with value >=
+ * `minNicks` each (migration fee heuristic); if fewer than `count` qualify,
+ * fill remaining slots from the smallest notes overall (same order as
+ * `sortedNotes`).
+ */
+function selectNotesWithMinThreshold(
+  sortedNotes: Array<{ note: NoteV0; assets: bigint }>,
+  count: number,
+  minNicks: bigint
+): NoteV0[] {
+  const out: NoteV0[] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < sortedNotes.length && out.length < count; i++) {
+    if (sortedNotes[i].assets >= minNicks) {
+      out.push(sortedNotes[i].note);
+      used.add(i);
+    }
+  }
+  for (let i = 0; i < sortedNotes.length && out.length < count; i++) {
+    if (used.has(i)) continue;
+    out.push(sortedNotes[i].note);
+    used.add(i);
+  }
+  return out;
+}
+
 function appendV0MigrationSpends(
   builder: wasm.TxBuilder,
   notes: NoteV0[],
@@ -123,7 +151,9 @@ export async function queryV0Balance(
  * For balance only, use {@link queryV0Balance}.
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
  *
- * @param options.maxNotes - Optional cap on number of smallest legacy notes to include.
+ * @param options.maxNotes - Optional cap on how many inputs to include (ascending
+ *   by value). Each slot prefers notes with value >= 100 NOCK, then fills from
+ *   the smallest notes overall if needed (same idea as single-note debug mode).
  */
 export async function buildV0MigrationTx(
   sourcePublicKey: PublicKey,
@@ -146,33 +176,42 @@ export async function buildV0MigrationTx(
       .map(note => ({ note, assets: BigInt(note.assets) }))
       .sort((a, b) => (a.assets < b.assets ? -1 : a.assets > b.assets ? 1 : 0));
 
-    // In single-note / debug mode, the smallest raw note often can't cover
-    // the migration fee, which causes build to fail. Heuristic: among notes
-    // >= 100 NOCK, take the smallest. Fall back to the absolute smallest only
-    // if no note clears the threshold (build may still fail, but we surface
-    // the real "not enough value to cover fee" error instead of silently
-    // picking a doomed note).
-    const MIN_SINGLE_NOTE_NICKS = BigInt(100) * BigInt(NOCK_TO_NICKS);
-    const singleNoteCandidates = sortedNotes.filter(
-      entry => entry.assets >= MIN_SINGLE_NOTE_NICKS
-    );
+    // Notes below ~100 NOCK often cannot cover the migration fee alone. For
+    // capped builds (`maxNotes`), prefer notes >= 100 NOCK (smallest first),
+    // then fill any remaining slots from the absolute smallest notes.
+    const MIN_NOTE_NICKS = BigInt(100) * BigInt(NOCK_TO_NICKS);
+    const singleNoteCandidates = sortedNotes.filter(entry => entry.assets >= MIN_NOTE_NICKS);
     const singleNotePick = (singleNoteCandidates[0] ?? sortedNotes[0])?.note;
+
+    const cappedCount =
+      typeof maxNotes === 'number' && Number.isFinite(maxNotes) && maxNotes > 0
+        ? Math.floor(maxNotes)
+        : 0;
 
     const notesToUse: NoteV0[] = debugSingleNote
       ? singleNotePick
         ? [singleNotePick]
         : []
-      : typeof maxNotes === 'number' && Number.isFinite(maxNotes) && maxNotes > 0
-        ? sortedNotes.slice(0, Math.floor(maxNotes)).map(entry => entry.note)
+      : cappedCount > 0
+        ? selectNotesWithMinThreshold(sortedNotes, cappedCount, MIN_NOTE_NICKS)
         : sortedNotes.map(entry => entry.note);
 
     if (debugSingleNote && singleNotePick) {
       console.log('[SDK Migration] Single-note mode selected note:', {
         pickedNote: summarizeNote(singleNotePick),
         viaThreshold: singleNoteCandidates.length > 0,
-        thresholdNock: Number(MIN_SINGLE_NOTE_NICKS) / NOCK_TO_NICKS,
+        thresholdNock: Number(MIN_NOTE_NICKS) / NOCK_TO_NICKS,
         totalLegacyNotes: v0Notes.length,
         notesAboveThreshold: singleNoteCandidates.length,
+      });
+    } else if (cappedCount > 1) {
+      console.log('[SDK Migration] Capped-note mode selected notes:', {
+        requested: cappedCount,
+        pickedCount: notesToUse.length,
+        picked: notesToUse.slice(0, 10).map(summarizeNote),
+        thresholdNock: Number(MIN_NOTE_NICKS) / NOCK_TO_NICKS,
+        notesAboveThreshold: singleNoteCandidates.length,
+        totalLegacyNotes: v0Notes.length,
       });
     }
 

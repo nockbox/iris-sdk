@@ -303,33 +303,11 @@ function mapResponse(
       }
       return response;
     }
-    case 'nock_signRawTx': {
-      if (fromV1 && !toV1) {
-        const v1 = response.result as SignTxResponse;
-        if (!v1?.tx) {
-          throw new Error('Invalid signTx response');
-        }
-        const rawTx = nockchainTxToRawTx(v1.tx);
-        if (!guard.isRawTxV1(rawTx)) {
-          throw new Error('Only V1 Raw TXs are supported at the moment');
-        }
-        const result = { rawTx: rawTxToProtobuf(rawTx) };
-        return { ...response, result };
-      }
-      if (!fromV1 && toV1) {
-        const legacy = response.result as { rawTx?: PbCom2RawTransaction };
-        if (!legacy?.rawTx || !guard.isPbCom2RawTransaction(legacy.rawTx)) {
-          throw new Error('Invalid legacy signRawTx response');
-        }
-        const rawTx = rawTxFromProtobuf(legacy.rawTx) as RawTxV1;
-        const nockchainTx = rawTxV1ToNockchainTx(rawTx);
-        const result: SignTxResponse = { tx: nockchainTx };
-        return { ...response, result };
-      }
-      return response;
-    }
     case PROVIDER_METHODS.SIGN_TX: {
       if (fromV1 && !toV1) {
+        // Legacy callers reach this path via `nock_signRawTx → SIGN_TX` request
+        // remapping, and their historical contract was a bare
+        // `PbCom2RawTransaction` (fed straight into `rpcClient.sendTransaction`).
         const v1 = response.result as SignTxResponse;
         if (!v1?.tx) {
           throw new Error('Invalid signTx response');
@@ -338,15 +316,25 @@ function mapResponse(
         if (!guard.isRawTxV1(rawTx)) {
           throw new Error('Only V1 Raw TXs are supported at the moment');
         }
-        const result = { rawTx: rawTxToProtobuf(rawTx) };
-        return { ...response, result };
+        return { ...response, result: rawTxToProtobuf(rawTx) };
       }
       if (!fromV1 && toV1) {
-        const legacy = response.result as { rawTx?: PbCom2RawTransaction };
-        if (!legacy?.rawTx || !guard.isPbCom2RawTransaction(legacy.rawTx)) {
+        // Accept both the historical bare shape and the previously-wrapped
+        // `{ rawTx }` shape.
+        const raw = response.result;
+        let legacyRawTx: PbCom2RawTransaction | undefined;
+        if (guard.isPbCom2RawTransaction(raw)) {
+          legacyRawTx = raw;
+        } else if (raw && typeof raw === 'object' && 'rawTx' in (raw as Record<string, unknown>)) {
+          const wrapped = (raw as { rawTx?: unknown }).rawTx;
+          if (guard.isPbCom2RawTransaction(wrapped)) {
+            legacyRawTx = wrapped;
+          }
+        }
+        if (!legacyRawTx) {
           throw new Error('Invalid legacy signRawTx response');
         }
-        const rawTx = rawTxFromProtobuf(legacy.rawTx);
+        const rawTx = rawTxFromProtobuf(legacyRawTx);
         if (!guard.isRawTxV1(rawTx)) {
           throw new Error('Only V1 Raw TXs are supported at the moment');
         }

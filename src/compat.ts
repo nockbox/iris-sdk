@@ -27,6 +27,7 @@ import {
   publicKeyToHex,
   RawTxV1,
   noteToProtobuf,
+  noteFromProtobuf,
   spendConditionToProtobuf,
   SpendCondition,
   Digest,
@@ -139,7 +140,8 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
           throw new Error('Only V1 Raw TXs are supported at the moment');
         }
         const tx = rawTxV1ToNockchainTx(rawTx);
-        const signParams = { tx };
+        const notes = req.notes.map(n => noteFromProtobuf(n));
+        const signParams: SignTxRequest = { tx, notes };
         return { ...request, method: PROVIDER_METHODS.SIGN_TX, params: signParams as unknown };
       }
       return request;

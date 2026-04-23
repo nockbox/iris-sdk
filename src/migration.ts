@@ -37,6 +37,14 @@ function parseV0Note(note?: PbCom2Note | null): NoteV0 | null {
   return guard.isNoteV0(parsed) ? parsed : null;
 }
 
+function summarizeNote(note: NoteV0): { assetsNicks: string; assetsNock: number } {
+  const assets = BigInt(note.assets);
+  return {
+    assetsNicks: assets.toString(),
+    assetsNock: Number(assets) / NOCK_TO_NICKS,
+  };
+}
+
 function appendV0MigrationSpends(
   builder: wasm.TxBuilder,
   notes: NoteV0[],
@@ -125,6 +133,8 @@ export async function buildV0MigrationTx(
 ): Promise<BuildV0MigrationTxResult> {
   const balanceResult = await queryV0Balance(sourcePublicKey, grpcEndpoint);
   const maxNotes = options.maxNotes;
+  const debugSingleNote =
+    typeof maxNotes === 'number' && Number.isFinite(maxNotes) && Math.floor(maxNotes) === 1;
 
   try {
     const v0Notes = balanceResult.v0Notes;
@@ -136,10 +146,35 @@ export async function buildV0MigrationTx(
       .map(note => ({ note, assets: BigInt(note.assets) }))
       .sort((a, b) => (a.assets < b.assets ? -1 : a.assets > b.assets ? 1 : 0));
 
-    const notesToUse: NoteV0[] =
-      typeof maxNotes === 'number' && Number.isFinite(maxNotes) && maxNotes > 0
+    // In single-note / debug mode, the smallest raw note often can't cover
+    // the migration fee, which causes build to fail. Heuristic: among notes
+    // >= 100 NOCK, take the smallest. Fall back to the absolute smallest only
+    // if no note clears the threshold (build may still fail, but we surface
+    // the real "not enough value to cover fee" error instead of silently
+    // picking a doomed note).
+    const MIN_SINGLE_NOTE_NICKS = BigInt(100) * BigInt(NOCK_TO_NICKS);
+    const singleNoteCandidates = sortedNotes.filter(
+      entry => entry.assets >= MIN_SINGLE_NOTE_NICKS
+    );
+    const singleNotePick = (singleNoteCandidates[0] ?? sortedNotes[0])?.note;
+
+    const notesToUse: NoteV0[] = debugSingleNote
+      ? singleNotePick
+        ? [singleNotePick]
+        : []
+      : typeof maxNotes === 'number' && Number.isFinite(maxNotes) && maxNotes > 0
         ? sortedNotes.slice(0, Math.floor(maxNotes)).map(entry => entry.note)
         : sortedNotes.map(entry => entry.note);
+
+    if (debugSingleNote && singleNotePick) {
+      console.log('[SDK Migration] Single-note mode selected note:', {
+        pickedNote: summarizeNote(singleNotePick),
+        viaThreshold: singleNoteCandidates.length > 0,
+        thresholdNock: Number(MIN_SINGLE_NOTE_NICKS) / NOCK_TO_NICKS,
+        totalLegacyNotes: v0Notes.length,
+        notesAboveThreshold: singleNoteCandidates.length,
+      });
+    }
 
     const targetSpendCondition = buildSinglePkhSpendCondition(targetV1Pkh);
     const refundLock = wasm.lockHash(targetSpendCondition);
@@ -178,7 +213,16 @@ export async function buildV0MigrationTx(
     };
     return result;
   } catch (e) {
-    console.warn('[SDK Migration] Build failed, returning balance only:', e);
+    console.warn('[SDK Migration] Build failed, returning balance only:', {
+      error: e instanceof Error ? e.message : String(e),
+      sourceAddress: balanceResult.sourceAddress,
+      rawNotesFromRpc: balanceResult.rawNotesFromRpc,
+      legacyV0Notes: balanceResult.v0Notes.length,
+      totalNicks: balanceResult.totalNicks,
+      smallestNoteNock: balanceResult.smallestNoteNock,
+      maxNotes,
+      singleNoteMode: debugSingleNote,
+    });
     return balanceResult;
   }
 }

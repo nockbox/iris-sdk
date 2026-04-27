@@ -267,19 +267,6 @@ function mapResponse(
       }
       if (fromV1 && !toV1) {
         // API 1 → legacy: { signature, publicKey } → { signature, publicKeyHex }
-        const raw = response.result;
-        if (raw && typeof raw === 'object') {
-          const r = raw as Record<string, unknown>;
-          // Extension returns legacy `{ signature: JSON string, publicKeyHex }`; do not
-          // assume WASM-shaped `signature.c` / `publicKey` (same pattern as CONNECT).
-          if (
-            typeof r.signature === 'string' &&
-            typeof r.publicKeyHex === 'string' &&
-            !('publicKey' in r)
-          ) {
-            return response;
-          }
-        }
         const v1 = response.result as SignMessageResponse;
 
         const toLegacyHex = (v: string | Uint8Array): number[] => {

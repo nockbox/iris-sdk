@@ -1,4 +1,4 @@
-import { NockchainProvider, wasm } from '../src/index';
+import { NockchainProvider, getLatestTxEngineSettings, wasm } from '../src/index';
 
 // ===== Types =====
 // Note: Nicks are strings in current WASM version, so they need to be cast into integers for arithmetic
@@ -42,6 +42,7 @@ const state = {
   connected: false,
   walletPkh: null as string | null,
   grpcEndpoint: null as string | null,
+  txEngineSettings: getLatestTxEngineSettings(),
   provider: null as NockchainProvider | null,
   grpcClient: null as wasm.GrpcClient | null,
 
@@ -135,16 +136,6 @@ function asLock(spendCondition: wasm.SpendCondition): wasm.Lock {
 
 function asTxLock(spendCondition: wasm.SpendCondition): wasm.TxLock {
   return spendCondition as unknown as wasm.TxLock;
-}
-
-function getTxEngineSettings(): wasm.TxEngineSettings {
-  return {
-    tx_engine_version: 1,
-    tx_engine_patch: 0,
-    min_fee: asNicks('256'),
-    cost_per_word: asNicks('32768'),
-    witness_word_div: 1,
-  };
 }
 
 declare global {
@@ -259,6 +250,7 @@ connectBtn.onclick = async () => {
     const info = await state.provider.connect();
     state.grpcEndpoint = info.rpcConfig.rpcUrl;
     state.walletPkh = info.account.address;
+    state.txEngineSettings = getLatestTxEngineSettings(info.rpcConfig.txEngineActivationHeights);
     state.connected = true;
 
     connectBtn.textContent = truncateAddress(state.walletPkh);
@@ -689,7 +681,7 @@ function updateBuilder() {
   try {
     console.log('Building transaction...');
 
-    const builder = new wasm.TxBuilder(getTxEngineSettings());
+    const builder = new wasm.TxBuilder(state.txEngineSettings);
 
     for (const spend of state.spends) {
       const lock = state.locks.find(l => l.id === spend.input.lockId);
@@ -989,7 +981,7 @@ function renderTransaction() {
 
     // Outputs: 0.2 use nockchainTxToRawTx + rawTxOutputs (maybe doesn't work)
     const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx);
-    const outputs = wasm.rawTxOutputs(rawTx, 0, getTxEngineSettings());
+    const outputs = wasm.rawTxOutputs(rawTx, 0, state.txEngineSettings);
     if (outputs && outputs.length > 0) {
       outputsList.innerHTML = outputs
         .map((output: wasm.Note, index: number) => {
@@ -1634,7 +1626,7 @@ signTxBtn.onclick = async () => {
     let validationError = '';
 
     try {
-      const signedBuilder = wasm.TxBuilder.fromNockchainTx(signed.tx, getTxEngineSettings());
+      const signedBuilder = wasm.TxBuilder.fromNockchainTx(signed.tx, state.txEngineSettings);
       signedBuilder.validate();
       signedBuilder.free();
       console.log('Signed transaction validated successfully');

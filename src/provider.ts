@@ -157,6 +157,7 @@ export class NockchainProvider {
    * Sign a raw transaction
    * Input must be NockchainTx.
    * @param tx - The transaction to sign
+   * @param notes - Optional approval-display metadata for legacy compatibility
    * @returns Promise resolving to the signed transaction
    * @throws {NoAccountError} If no account is connected
    * @throws {UserRejectedError} If the user rejects the signing request

@@ -90,8 +90,8 @@ export interface SendTransactionRequest {
 export interface SignTxRequest {
   tx: NockchainTx;
   /**
-   * Optional notes for the transaction. Required for API 0 wallet compatibility.
-   * This will be removed in future SDK releases.
+   * Optional input notes supplied for approval display and API 0 wallet compatibility.
+   * The canonical signer consumes `tx`; notes are sidecar metadata.
    */
   notes?: Note[];
 }

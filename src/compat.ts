@@ -42,7 +42,8 @@ import {
 
 /**
  * Legacy `nock_signRawTx` RPC params (API 0): protobuf raw tx plus matching notes and spend conditions.
- * Compat maps this to v1 `SIGN_TX` with a native `NockchainTx`. v1 callers use `SignTxRequest` instead.
+ * Compat maps this to v1 `SIGN_TX` with a native `NockchainTx`.
+ * Notes are preserved as approval-display metadata; signing uses the canonical transaction.
  */
 interface LegacySignRawTxRequest {
   rawTx: PbCom2RawTransaction;
@@ -141,6 +142,9 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
         }
         const tx = rawTxV1ToNockchainTx(rawTx);
         const notes = req.notes.map(n => noteFromProtobuf(n));
+        // `spendConditions` are validated above for legacy request compatibility. They are
+        // encoded in / derivable from the raw transaction, so the v1 request only carries
+        // notes as display metadata.
         const signParams: SignTxRequest = { tx, notes };
         return { ...request, method: PROVIDER_METHODS.SIGN_TX, params: signParams as unknown };
       }

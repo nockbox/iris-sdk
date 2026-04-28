@@ -979,7 +979,7 @@ function renderTransaction() {
       </div>
     `;
 
-    // Outputs: 0.2 use nockchainTxToRawTx + rawTxOutputs (maybe doesn't work)
+    // Preview outputs from the raw transaction using the connected network's tx engine settings.
     const rawTx = wasm.nockchainTxToRawTx(state.nockchainTx);
     const outputs = wasm.rawTxOutputs(rawTx, 0, state.txEngineSettings);
     if (outputs && outputs.length > 0) {

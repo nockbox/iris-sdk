@@ -300,6 +300,19 @@ export async function buildBridgeTransaction(
     });
   }
 
+  if (remainingGift > 0n) {
+    const requestedGift = BigInt(params.amountInNicks);
+    const fundedGift = requestedGift - remainingGift;
+    logBridgeDebug(options, 'Insufficient bridge input assets', {
+      requestedGiftNicks: requestedGift.toString(),
+      fundedGiftNicks: fundedGift.toString(),
+      shortfallNicks: remainingGift.toString(),
+    });
+    throw new Error(
+      `Insufficient input note assets for bridge amount: requested ${requestedGift.toString()} nicks, funded ${fundedGift.toString()} nicks, shortfall ${remainingGift.toString()} nicks`
+    );
+  }
+
   builder.recalcAndSetFee(false);
   const feeResult = builder.curFee();
   const transaction = builder.build();

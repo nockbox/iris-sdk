@@ -358,7 +358,7 @@ export async function validateBridgeTransaction(
     }
 
     // Read each output via its protobuf form so the bridge note data is the raw
-    // jammed bytes (blob), not a serde-shaped JS value. 
+    // jammed bytes (blob), not a serde-shaped JS value.
     const outputData = outputs.map((output: Note) => {
       const proto = wasm.noteToProtobuf(output) as PbCom2Note;
       const version = proto.note_version;

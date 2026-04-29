@@ -65,15 +65,6 @@ export function beltsToEvmAddress(belt1: bigint, belt2: bigint, belt3: bigint): 
   return '0x' + address.toString(16).padStart(40, '0');
 }
 
-/** Encode a string as a Hoon cord (little-endian hex). */
-export function stringToAtom(str: string): string {
-  const bytes = new TextEncoder().encode(str);
-  let hex = '';
-  for (let i = bytes.length - 1; i >= 0; i--) {
-    hex += bytes[i].toString(16).padStart(2, '0');
-  }
-  return hex || '0';
-}
 
 /** Encode a bigint as hex (no 0x prefix). */
 export function bigintToAtom(n: bigint): string {

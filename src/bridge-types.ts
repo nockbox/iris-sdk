@@ -56,8 +56,6 @@ export interface BridgeTransactionParams {
  */
 export interface BuildBridgeTransactionOptions {
   txEngineSettings: TxEngineSettings;
-  /** Enable verbose SDK bridge debug logs */
-  debug?: boolean;
 }
 
 /**

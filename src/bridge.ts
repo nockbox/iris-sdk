@@ -114,15 +114,6 @@ export function isBridgeConfigured(config: BridgeConfig): boolean {
   );
 }
 
-function logBridgeDebug(
-  options: BuildBridgeTransactionOptions | undefined,
-  label: string,
-  payload: Record<string, unknown>
-): void {
-  if (options?.debug !== true) return;
-  console.log(`[SDK Bridge] ${label}:`, payload);
-}
-
 // TODO(iris-wasm): `isAtom` and `readPair` are adapters for `Noun`'s runtime
 // shape, not bridge logic. They should live alongside `cue`/`jam` in
 // `iris-wasm` (ideally replaced by a proper `nounToJs` that returns nested
@@ -212,13 +203,6 @@ export async function buildBridgeTransaction(
     );
   }
 
-  logBridgeDebug(options, 'Build start', {
-    destinationAddress: params.destinationAddress,
-    amountInNicks: params.amountInNicks,
-    inputCount: params.inputNotes.length,
-    refundPkh: params.refundPkh,
-  });
-
   const bridgeNounJs = buildBridgeNoun(params.destinationAddress, config);
   const noteData: NoteData = [[config.noteDataKey, bridgeNounJs]];
 
@@ -234,94 +218,72 @@ export async function buildBridgeTransaction(
 
   const builder = new wasm.TxBuilder(options.txEngineSettings);
 
-  let remainingGift = BigInt(params.amountInNicks);
+  try {
+    let remainingGift = BigInt(params.amountInNicks);
 
-  for (let i = 0; i < params.inputNotes.length; i++) {
-    const note = params.inputNotes[i];
-    const spendCondition = params.spendConditions[i];
-    if (!spendCondition) {
-      logBridgeDebug(options, 'Missing spend condition', {
-        inputIndex: i,
-        noteAssets: note.assets,
-      });
-      throw new Error('Spend condition is missing for this input note');
+    for (let i = 0; i < params.inputNotes.length; i++) {
+      const note = params.inputNotes[i];
+      const spendCondition = params.spendConditions[i];
+      if (!spendCondition) {
+        throw new Error('Spend condition is missing for this input note');
+      }
+      const noteAssets = BigInt(note.assets ?? 0);
+
+      const giftPortion = remainingGift < noteAssets ? remainingGift : noteAssets;
+      remainingGift -= giftPortion;
+
+      let spendBuilder: InstanceType<typeof wasm.SpendBuilder> | undefined;
+      try {
+        spendBuilder = new wasm.SpendBuilder(
+          note,
+          spendCondition as unknown as Lock,
+          0,
+          refundLockRoot
+        );
+
+        if (giftPortion > 0n) {
+          const parentHash = wasm.noteHash(note);
+          const seed: SeedV1 = {
+            output_source: null,
+            lock_root: bridgeLockRoot,
+            note_data: noteData,
+            gift: giftPortion.toString() as Nicks,
+            parent_hash: parentHash,
+          };
+          spendBuilder.seed(seed);
+        }
+
+        spendBuilder.computeRefund(false);
+        builder.spend(spendBuilder);
+        spendBuilder = undefined;
+      } finally {
+        spendBuilder?.free();
+      }
     }
-    const noteAssets = BigInt(note.assets ?? 0);
 
-    const giftPortion = remainingGift < noteAssets ? remainingGift : noteAssets;
-    remainingGift -= giftPortion;
-
-    let spendBuilder: InstanceType<typeof wasm.SpendBuilder>;
-    try {
-      spendBuilder = new wasm.SpendBuilder(
-        note,
-        spendCondition as unknown as Lock,
-        0,
-        refundLockRoot
+    if (remainingGift > 0n) {
+      const requestedGift = BigInt(params.amountInNicks);
+      const fundedGift = requestedGift - remainingGift;
+      throw new Error(
+        `Insufficient input note assets for bridge amount: requested ${requestedGift.toString()} nicks, funded ${fundedGift.toString()} nicks, shortfall ${remainingGift.toString()} nicks`
       );
-    } catch (error) {
-      logBridgeDebug(options, 'SpendBuilder creation failed', {
-        inputIndex: i,
-        noteAssets: note.assets,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
     }
 
-    if (giftPortion > 0n) {
-      const parentHash = wasm.noteHash(note);
-      const seed: SeedV1 = {
-        output_source: null,
-        lock_root: bridgeLockRoot,
-        note_data: noteData,
-        gift: giftPortion.toString() as Nicks,
-        parent_hash: parentHash,
-      };
-      spendBuilder.seed(seed);
-    }
+    builder.recalcAndSetFee(false);
+    const feeResult = builder.curFee();
+    const transaction = builder.build();
 
-    spendBuilder.computeRefund(false);
-    builder.spend(spendBuilder);
+    const txId = transaction.id;
+    const fee = feeResult;
 
-    logBridgeDebug(options, 'Input processed', {
-      inputIndex: i,
-      noteAssetsNicks: noteAssets.toString(),
-      giftPortionNicks: giftPortion.toString(),
-      remainingGiftNicks: remainingGift.toString(),
-    });
+    return {
+      transaction,
+      txId,
+      fee,
+    };
+  } finally {
+    builder.free();
   }
-
-  if (remainingGift > 0n) {
-    const requestedGift = BigInt(params.amountInNicks);
-    const fundedGift = requestedGift - remainingGift;
-    logBridgeDebug(options, 'Insufficient bridge input assets', {
-      requestedGiftNicks: requestedGift.toString(),
-      fundedGiftNicks: fundedGift.toString(),
-      shortfallNicks: remainingGift.toString(),
-    });
-    throw new Error(
-      `Insufficient input note assets for bridge amount: requested ${requestedGift.toString()} nicks, funded ${fundedGift.toString()} nicks, shortfall ${remainingGift.toString()} nicks`
-    );
-  }
-
-  builder.recalcAndSetFee(false);
-  const feeResult = builder.curFee();
-  const transaction = builder.build();
-
-  const txId = transaction.id;
-  const fee = feeResult;
-
-  logBridgeDebug(options, 'Build complete', {
-    txId,
-    feeNicks: fee,
-    remainingGiftNicks: remainingGift.toString(),
-  });
-
-  return {
-    transaction,
-    txId,
-    fee,
-  };
 }
 
 /**
@@ -339,10 +301,6 @@ export async function validateBridgeTransaction(
   try {
     const rawTx = wasm.rawTxFromProtobuf(rawTxProto as PbCom2RawTransaction);
     const outputs = wasm.rawTxOutputs(rawTx, 0, options.txEngineSettings);
-    logBridgeDebug(options, 'Validate start', {
-      outputCount: outputs.length,
-      noteDataKey: config.noteDataKey,
-    });
 
     if (outputs.length === 0) {
       return { valid: false, error: 'Transaction has no outputs' };
@@ -481,9 +439,6 @@ export async function validateBridgeTransaction(
       chain: validatedChain,
     };
   } catch (err) {
-    logBridgeDebug(options, 'Validate failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
     return {
       valid: false,
       error: `Transaction validation failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -65,7 +65,6 @@ export function beltsToEvmAddress(belt1: bigint, belt2: bigint, belt3: bigint): 
   return '0x' + address.toString(16).padStart(40, '0');
 }
 
-
 /** Encode a bigint as hex (no 0x prefix). */
 export function bigintToAtom(n: bigint): string {
   if (n === 0n) return '0';

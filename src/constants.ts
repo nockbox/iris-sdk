@@ -88,8 +88,8 @@ export const DEFAULT_COINBASE_TIMELOCK_BLOCKS = 100;
 /** Zorp bridge (Nockchain → Base) — minimum amount in NOCK (UI / validation guardrail). */
 export const MIN_BRIDGE_AMOUNT_NOCK = 100_000;
 
-/** Bridge protocol fee rate used for extension review display (3%). */
-export const BRIDGE_PROTOCOL_FEE_RATE = 0.03;
+/** Bridge protocol fee rate used for extension review display (0.3%). */
+export const BRIDGE_PROTOCOL_FEE_RATE = 0.003;
 
 /** Zorp bridge 3-of-5 multisig (Nockchain → Base). */
 export const ZORP_BRIDGE_THRESHOLD = 3;

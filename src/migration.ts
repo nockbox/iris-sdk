@@ -229,6 +229,9 @@ export async function buildV0MigrationTx(
     const feeNicks = builder.curFee();
     const transaction = builder.build();
     const rawTx: RawTxV1 = wasm.nockchainTxToRawTx(transaction);
+    if (!guard.isRawTxV1(rawTx)) {
+      throw new Error('Built v0 migration transaction contains a spend without seeds');
+    }
 
     const inputNotes = notesToUse;
     const feeNock = Number(BigInt(feeNicks)) / NOCK_TO_NICKS;

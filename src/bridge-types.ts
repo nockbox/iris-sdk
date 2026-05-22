@@ -58,6 +58,12 @@ export interface BuildBridgeTransactionOptions {
   txEngineSettings: TxEngineSettings;
 }
 
+/** Intent a built bridge transaction must match (same fields used to construct it). */
+export type BridgeValidationParams = Pick<
+  BridgeTransactionParams,
+  'destinationAddress' | 'amountInNicks' | 'refundPkh'
+>;
+
 /**
  * Result of building a bridge transaction (unsigned).
  */
@@ -88,4 +94,6 @@ export interface BridgeValidationResult {
   version?: string;
   /** Chain identifier */
   chain?: string;
+  /** Lock root digest for the bridge output seed */
+  bridgeLockRoot?: string;
 }

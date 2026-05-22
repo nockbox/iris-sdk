@@ -8,6 +8,7 @@ import type {
   BridgeConfig,
   BridgeTransactionParams,
   BridgeTransactionResult,
+  BridgeValidationParams,
   BridgeValidationResult,
   BuildBridgeTransactionOptions,
 } from './bridge-types.js';
@@ -22,6 +23,7 @@ import type {
   PbCom2Note,
   PbCom2NoteDataEntry,
   PbCom2RawTransaction,
+  RawTxV1,
   SeedV1,
   SpendCondition,
 } from '@nockbox/iris-wasm/iris_wasm.js';
@@ -166,6 +168,54 @@ function parseDigestString(value: string, field: string): Digest {
   return trimmed as Digest;
 }
 
+function normalizeEvmAddress(address: string): string {
+  const trimmed = address.trim();
+  const withPrefix = trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`;
+  return withPrefix.toLowerCase();
+}
+
+function noteDataHasKey(noteData: NoteData | undefined, key: string): boolean {
+  if (!Array.isArray(noteData)) return false;
+  return noteData.some(entry => Array.isArray(entry) && entry[0] === key);
+}
+
+function digestFromLockRoot(lockRoot: LockRoot): string {
+  if (typeof lockRoot === 'string') {
+    return lockRoot;
+  }
+  return wasm.lockRootHash(lockRoot);
+}
+
+function collectBridgeSeeds(rawTx: RawTxV1, noteDataKey: string): SeedV1[] {
+  const bridgeSeeds: SeedV1[] = [];
+  for (const [, spend] of rawTx.spends) {
+    for (const seed of spend.seeds) {
+      if (noteDataHasKey(seed.note_data, noteDataKey)) {
+        bridgeSeeds.push(seed);
+      }
+    }
+  }
+  return bridgeSeeds;
+}
+
+/**
+ * Derive the bridge multisig lock root from config (same path as buildBridgeTransaction).
+ */
+export function computeBridgeLockRoot(config: BridgeConfig): string {
+  const bridgePkh = wasm.pkhNew(
+    BigInt(config.threshold),
+    config.addresses.map(address => parseDigestString(address, 'bridge address'))
+  );
+  const bridgeSpendCondition = wasm.spendConditionNewPkh(bridgePkh);
+  return wasm.lockHash(bridgeSpendCondition);
+}
+
+function computeRefundLockRoot(refundPkh: string): string {
+  const refundPkhObj = wasm.pkhSingle(parseDigestString(refundPkh, 'refund pkh'));
+  const refundSpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
+  return wasm.lockHash(refundSpendCondition);
+}
+
 /**
  * Create jammed bridge note data for an EVM address (requires WASM).
  * Caller must have initialized WASM (e.g. await wasm.default()) before using.
@@ -291,14 +341,61 @@ export async function buildBridgeTransaction(
  */
 export async function validateBridgeTransaction(
   rawTxProto: unknown,
+  params: BridgeValidationParams,
   config: BridgeConfig,
   options: BuildBridgeTransactionOptions
 ): Promise<BridgeValidationResult> {
   if (!options?.txEngineSettings) {
     throw new Error('txEngineSettings is required in options (see BuildBridgeTransactionOptions)');
   }
+  if (!isEvmAddress(params.destinationAddress)) {
+    return { valid: false, error: `Invalid destination address: ${params.destinationAddress}` };
+  }
   try {
     const rawTx = wasm.rawTxFromProtobuf(rawTxProto as PbCom2RawTransaction);
+    if (!('version' in rawTx) || rawTx.version !== 1) {
+      return { valid: false, error: 'Bridge transaction must be version 1' };
+    }
+    const rawTxV1 = rawTx as RawTxV1;
+
+    const bridgeLockRoot = computeBridgeLockRoot(config);
+    if (config.expectedLockRoot && config.expectedLockRoot !== bridgeLockRoot) {
+      return {
+        valid: false,
+        error: 'Bridge configuration lock root does not match configured bridge signer set',
+      };
+    }
+    const refundLockRoot = computeRefundLockRoot(params.refundPkh);
+
+    const bridgeSeeds = collectBridgeSeeds(rawTxV1, config.noteDataKey);
+    if (bridgeSeeds.length === 0) {
+      return {
+        valid: false,
+        error: `No bridge seed with '${config.noteDataKey}' note data found in transaction spends`,
+      };
+    }
+
+    let bridgeSeedGiftTotal = 0n;
+    for (const [, spend] of rawTxV1.spends) {
+      for (const seed of spend.seeds) {
+        const seedLockRoot = digestFromLockRoot(seed.lock_root);
+        if (noteDataHasKey(seed.note_data, config.noteDataKey)) {
+          if (seedLockRoot !== bridgeLockRoot) {
+            return {
+              valid: false,
+              error: `Bridge seed lock root mismatch: expected ${bridgeLockRoot}, got ${seedLockRoot}`,
+            };
+          }
+          bridgeSeedGiftTotal += BigInt(seed.gift ?? 0);
+        } else if (seedLockRoot !== refundLockRoot) {
+          return {
+            valid: false,
+            error: `Refund seed lock root mismatch: expected ${refundLockRoot}, got ${seedLockRoot}`,
+          };
+        }
+      }
+    }
+
     const outputs = wasm.rawTxOutputs(rawTx, 0, options.txEngineSettings);
 
     if (outputs.length === 0) {
@@ -337,6 +434,21 @@ export async function validateBridgeTransaction(
       return {
         valid: false,
         error: `Bridge amount ${bridgeOutput.assets} nicks is below minimum ${config.minAmountNicks} nicks`,
+      };
+    }
+
+    if (bridgeSeedGiftTotal !== BigInt(bridgeOutput.assets)) {
+      return {
+        valid: false,
+        error: `Bridge seed gifts (${bridgeSeedGiftTotal} nicks) do not match bridge output (${bridgeOutput.assets} nicks)`,
+      };
+    }
+
+    const expectedAmount = BigInt(params.amountInNicks);
+    if (BigInt(bridgeOutput.assets) !== expectedAmount) {
+      return {
+        valid: false,
+        error: `Bridge amount mismatch: expected ${expectedAmount} nicks, got ${bridgeOutput.assets} nicks`,
       };
     }
 
@@ -419,6 +531,15 @@ export async function validateBridgeTransaction(
           error: `Reconstructed address is invalid: ${destinationAddress}`,
         };
       }
+
+      const expectedDestination = normalizeEvmAddress(params.destinationAddress);
+      const actualDestination = normalizeEvmAddress(destinationAddress);
+      if (expectedDestination !== actualDestination) {
+        return {
+          valid: false,
+          error: `Destination address mismatch: expected ${expectedDestination}, got ${actualDestination}`,
+        };
+      }
     } catch (err) {
       return {
         valid: false,
@@ -436,6 +557,7 @@ export async function validateBridgeTransaction(
       noteDataKey: validatedNoteDataKey,
       version: validatedVersion,
       chain: validatedChain,
+      bridgeLockRoot,
     };
   } catch (err) {
     return {
@@ -451,10 +573,11 @@ export async function validateBridgeTransaction(
 export async function assertValidBridgeTransaction(
   rawTxProto: unknown,
   context: 'pre-signing' | 'post-signing',
+  params: BridgeValidationParams,
   config: BridgeConfig,
   options: BuildBridgeTransactionOptions
 ): Promise<BridgeValidationResult> {
-  const result = await validateBridgeTransaction(rawTxProto, config, options);
+  const result = await validateBridgeTransaction(rawTxProto, params, config, options);
   if (!result.valid) {
     throw new Error(`${context} validation failed: ${result.error}`);
   }
@@ -466,6 +589,7 @@ export type {
   BridgeConfig,
   BridgeTransactionParams,
   BridgeTransactionResult,
+  BridgeValidationParams,
   BridgeValidationResult,
   BuildBridgeTransactionOptions,
   TxEngineSettings,

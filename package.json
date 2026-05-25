@@ -41,16 +41,16 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "prettier": "^3.4.2",
     "typescript": "^5.5.3",
-    "vite": "^5.0.0",
-    "prettier": "^3.4.2"
+    "vite": "^5.0.0"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/nockbox/iris-sdk.git"
   },
   "dependencies": {
-    "@nockbox/iris-wasm": "^0.2.0-alpha.10",
+    "@nockbox/iris-wasm": "file:../iris-rs/crates/iris-wasm/pkg",
     "@scure/base": "^2.0.0"
   }
 }

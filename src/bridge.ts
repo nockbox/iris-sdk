@@ -22,7 +22,6 @@ import type {
   Noun,
   PbCom2Note,
   PbCom2NoteDataEntry,
-  PbCom2RawTransaction,
   RawTxV1,
   SeedV1,
   SpendCondition,
@@ -340,7 +339,7 @@ export async function buildBridgeTransaction(
  * Uses config for note key, min amount, and optional lock root.
  */
 export async function validateBridgeTransaction(
-  rawTxProto: unknown,
+  rawTx: RawTxV1,
   params: BridgeValidationParams,
   config: BridgeConfig,
   options: BuildBridgeTransactionOptions
@@ -352,12 +351,6 @@ export async function validateBridgeTransaction(
     return { valid: false, error: `Invalid destination address: ${params.destinationAddress}` };
   }
   try {
-    const rawTx = wasm.rawTxFromProtobuf(rawTxProto as PbCom2RawTransaction);
-    if (!('version' in rawTx) || rawTx.version !== 1) {
-      return { valid: false, error: 'Bridge transaction must be version 1' };
-    }
-    const rawTxV1 = rawTx as RawTxV1;
-
     const bridgeLockRoot = computeBridgeLockRoot(config);
     if (config.expectedLockRoot && config.expectedLockRoot !== bridgeLockRoot) {
       return {
@@ -367,7 +360,7 @@ export async function validateBridgeTransaction(
     }
     const refundLockRoot = computeRefundLockRoot(params.refundPkh);
 
-    const bridgeSeeds = collectBridgeSeeds(rawTxV1, config.noteDataKey);
+    const bridgeSeeds = collectBridgeSeeds(rawTx, config.noteDataKey);
     if (bridgeSeeds.length === 0) {
       return {
         valid: false,
@@ -376,7 +369,7 @@ export async function validateBridgeTransaction(
     }
 
     let bridgeSeedGiftTotal = 0n;
-    for (const [, spend] of rawTxV1.spends) {
+    for (const [, spend] of rawTx.spends) {
       for (const seed of spend.seeds) {
         const seedLockRoot = digestFromLockRoot(seed.lock_root);
         if (noteDataHasKey(seed.note_data, config.noteDataKey)) {
@@ -571,13 +564,13 @@ export async function validateBridgeTransaction(
  * Validate and throw if invalid (convenience wrapper).
  */
 export async function assertValidBridgeTransaction(
-  rawTxProto: unknown,
+  rawTx: RawTxV1,
   context: 'pre-signing' | 'post-signing',
   params: BridgeValidationParams,
   config: BridgeConfig,
   options: BuildBridgeTransactionOptions
 ): Promise<BridgeValidationResult> {
-  const result = await validateBridgeTransaction(rawTxProto, params, config, options);
+  const result = await validateBridgeTransaction(rawTx, params, config, options);
   if (!result.valid) {
     throw new Error(`${context} validation failed: ${result.error}`);
   }

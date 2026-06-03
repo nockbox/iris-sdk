@@ -1,6 +1,6 @@
 /**
  * Bridge utilities for Nockchain ↔ EVM bridging.
- * Encoding uses the Goldilocks prime field (3 belts) for EVM addresses.
+ * Encoding uses the wasm atom/belt conversion helpers for EVM addresses.
  * Consumers provide BridgeConfig; the SDK handles transaction construction and validation.
  */
 
@@ -29,9 +29,6 @@ import type {
 import { base58 } from '@scure/base';
 import * as wasm from './wasm.js';
 
-// Goldilocks prime: 2^64 - 2^32 + 1
-export const GOLDILOCKS_PRIME = 2n ** 64n - 2n ** 32n + 1n;
-
 /** Simple EVM address check (0x + 40 hex chars). No checksum validation. */
 export function isEvmAddress(address: string): boolean {
   const s = (address || '').trim();
@@ -39,31 +36,61 @@ export function isEvmAddress(address: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(normalized);
 }
 
+function evmAddressToAtom(address: string): string {
+  return normalizeEvmAddress(address).slice(2).replace(/^0+/, '') || '0';
+}
+
+function atomToEvmAddress(atom: string): string {
+  return `0x${atom.padStart(40, '0')}`;
+}
+
+function atomToBigint(atom: string): bigint {
+  return BigInt(`0x${atom}`);
+}
+
+function nounArray(head: Noun, ...tail: Noun[]): Noun {
+  const noun: [Noun] = [head];
+  noun.push(...tail);
+  return noun;
+}
+
+function beltTupleToNoun(belt1: bigint, belt2: bigint, belt3: bigint): Noun {
+  return nounArray(bigintToAtom(belt1), bigintToAtom(belt2), bigintToAtom(belt3));
+}
+
+function beltNounToTuple(noun: Noun): [bigint, bigint, bigint] {
+  const atoms = Array.isArray(noun) ? Array.from(noun) : null;
+  if (!Array.isArray(atoms) || atoms.length > 3 || !atoms.every(isAtom)) {
+    throw new Error('Invalid EVM address belt encoding: expected at most 3 belt atoms');
+  }
+
+  return [
+    atomToBigint(atoms[0] ?? '0'),
+    atomToBigint(atoms[1] ?? '0'),
+    atomToBigint(atoms[2] ?? '0'),
+  ];
+}
+
 /**
- * Convert an EVM address to 3 belts (Goldilocks field elements).
+ * Convert an EVM address to 3 belts through the canonical atom encoding.
  */
 export function evmAddressToBelts(address: string): [bigint, bigint, bigint] {
   if (!isEvmAddress(address)) {
     throw new Error(`Invalid EVM address: ${address}`);
   }
-  const normalized = address.startsWith('0x') ? address : `0x${address}`;
-  const addr = BigInt(normalized);
 
-  const belt1 = addr % GOLDILOCKS_PRIME;
-  const q1 = addr / GOLDILOCKS_PRIME;
-  const belt2 = q1 % GOLDILOCKS_PRIME;
-  const belt3 = q1 / GOLDILOCKS_PRIME;
-
-  return [belt1, belt2, belt3];
+  return beltNounToTuple(wasm.atomToBelts(evmAddressToAtom(address)));
 }
 
 /**
  * Convert 3 belts back to an EVM address.
  */
 export function beltsToEvmAddress(belt1: bigint, belt2: bigint, belt3: bigint): string {
-  const p = GOLDILOCKS_PRIME;
-  const address = belt1 + belt2 * p + belt3 * p * p;
-  return '0x' + address.toString(16).padStart(40, '0');
+  const atom = wasm.beltsToAtom(beltTupleToNoun(belt1, belt2, belt3));
+  if (!isAtom(atom)) {
+    throw new Error('Invalid EVM address belt encoding: decoded atom is not an atom');
+  }
+  return atomToEvmAddress(atom);
 }
 
 /** Encode a bigint as hex (no 0x prefix). */
@@ -84,10 +111,13 @@ export function buildBridgeNoun(
   config: Pick<BridgeConfig, 'chainTag' | 'versionTag'>
 ): Noun {
   const [belt1, belt2, belt3] = evmAddressToBelts(evmAddress);
-  return [
+  return nounArray(
     config.versionTag,
-    [config.chainTag, [bigintToAtom(belt1), [bigintToAtom(belt2), bigintToAtom(belt3)]]],
-  ] as unknown as Noun;
+    nounArray(
+      config.chainTag,
+      nounArray(bigintToAtom(belt1), nounArray(bigintToAtom(belt2), bigintToAtom(belt3)))
+    )
+  );
 }
 
 /**
@@ -149,12 +179,12 @@ function isAtom(noun: Noun | undefined): noun is string {
  */
 function readPair(noun: Noun | undefined): [Noun, Noun] | null {
   // The wasm `Noun` type is declared as `string | [Noun]`, but at runtime a
-  // pair arrives as a flat array of length >= 2. Re-narrow through `unknown`
+  // pair arrives as a flat array of length >= 2. Copy it into a normal array
   // so we can inspect the real shape.
-  const arr = noun as unknown;
-  if (!Array.isArray(arr) || arr.length < 2) return null;
-  const head = arr[0] as Noun;
-  const tail = (arr.length === 2 ? arr[1] : arr.slice(1)) as Noun;
+  const arr = Array.isArray(noun) ? Array.from(noun) : null;
+  if (!arr || arr.length < 2) return null;
+  const head = arr[0];
+  const tail = arr.length === 2 ? arr[1] : nounArray(arr[1], ...arr.slice(2));
   return [head, tail];
 }
 
@@ -259,10 +289,10 @@ export async function buildBridgeTransaction(
     config.addresses.map(address => parseDigestString(address, 'bridge address'))
   );
   const bridgeSpendCondition: SpendCondition = wasm.spendConditionNewPkh(bridgePkh);
-  const bridgeLockRoot: LockRoot = bridgeSpendCondition as unknown as LockRoot;
+  const bridgeLockRoot: LockRoot = bridgeSpendCondition;
   const refundPkhObj = wasm.pkhSingle(parseDigestString(params.refundPkh, 'refund pkh'));
   const refundSpendCondition: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
-  const refundLockRoot: LockRoot = refundSpendCondition as unknown as LockRoot;
+  const refundLockRoot: LockRoot = refundSpendCondition;
 
   const builder = new wasm.TxBuilder(options.txEngineSettings);
 
@@ -284,7 +314,7 @@ export async function buildBridgeTransaction(
       try {
         spendBuilder = new wasm.SpendBuilder(
           note,
-          spendCondition as unknown as Lock,
+          spendCondition,
           0,
           refundLockRoot
         );

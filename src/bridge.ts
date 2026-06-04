@@ -16,12 +16,10 @@ import type {
   Lock,
   LockRoot,
   Digest,
-  Note,
   NoteData,
+  NoteV1,
   Nicks,
   Noun,
-  PbCom2Note,
-  PbCom2NoteDataEntry,
   RawTxV1,
   SeedV1,
   SpendCondition,
@@ -227,6 +225,18 @@ function collectBridgeSeeds(rawTx: RawTxV1, noteDataKey: string): SeedV1[] {
   return bridgeSeeds;
 }
 
+/** Read V1 output note data*/
+function bridgeOutputData(note: NoteV1, noteDataKey: string): { assets: bigint; noteData: Noun } | null {
+  const entry = note.note_data.find(
+    (row): row is [string, Noun] => Array.isArray(row) && row[0] === noteDataKey
+  );
+  if (!entry) return null;
+  return {
+    assets: BigInt(note.assets ?? 0),
+    noteData: entry[1],
+  };
+}
+
 /**
  * Derive the bridge multisig lock root from config (same path as buildBridgeTransaction).
  */
@@ -419,31 +429,16 @@ export async function validateBridgeTransaction(
       }
     }
 
-    const outputs = wasm.rawTxOutputs(rawTx, 0, options.txEngineSettings);
+    const outputs = wasm.rawTxV1Outputs(rawTx, 0, options.txEngineSettings);
 
     if (outputs.length === 0) {
       return { valid: false, error: 'Transaction has no outputs' };
     }
 
-    // Read each output via its protobuf form so the bridge note data is the raw
-    // jammed bytes (blob), not a serde-shaped JS value.
-    const outputData = outputs.map((output: Note) => {
-      const proto = wasm.noteToProtobuf(output) as PbCom2Note;
-      const version = proto.note_version;
-      const v1 = version && 'V1' in version ? version.V1 : undefined;
-      const entries: PbCom2NoteDataEntry[] = v1?.note_data?.entries ?? [];
-      return {
-        assets: BigInt(v1?.assets?.value ?? 0),
-        entries,
-      };
-    });
-
-    let bridgeOutput: (typeof outputData)[0] | null = null;
-    for (const output of outputData) {
-      if (output.entries.some(e => e.key === config.noteDataKey)) {
-        bridgeOutput = output;
-        break;
-      }
+    let bridgeOutput: ReturnType<typeof bridgeOutputData> = null;
+    for (const output of outputs) {
+      bridgeOutput = bridgeOutputData(output, config.noteDataKey);
+      if (bridgeOutput) break;
     }
 
     if (!bridgeOutput) {
@@ -475,24 +470,16 @@ export async function validateBridgeTransaction(
       };
     }
 
-    const bridgeEntry = bridgeOutput.entries.find(e => e.key === config.noteDataKey);
-    if (!bridgeEntry) {
-      return {
-        valid: false,
-        error: `Bridge output missing '${config.noteDataKey}' note data entry`,
-      };
-    }
-
     let destinationAddress: string | undefined;
     let belts: [bigint, bigint, bigint] | undefined;
     let validatedVersion: string | undefined;
     let validatedChain: string | undefined;
-    const validatedNoteDataKey = bridgeEntry.key;
+    const validatedNoteDataKey = config.noteDataKey;
 
     try {
-      // Deserialize the jammed blob into a noun, then walk it as a chain of
-      // right-nested pairs: [version [chain [belt1 [belt2 belt3]]]].
-      const noun = wasm.cue(new Uint8Array(bridgeEntry.blob));
+      // Walk the native note-data noun as a chain of right-nested pairs:
+      // [version [chain [belt1 [belt2 belt3]]]].
+      const noun = bridgeOutput.noteData;
 
       const versionPair = readPair(noun);
       if (!versionPair) {

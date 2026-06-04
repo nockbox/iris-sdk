@@ -2,10 +2,23 @@
  * NockchainProvider - Main SDK class for interacting with Iris wallet
  */
 
-import type { Transaction, NockchainEvent, EventListener, InjectedNockchain } from './types.js';
-import { TransactionBuilder } from './transaction.js';
+import type {
+  Account,
+  ConnectResponse,
+  NockchainEvent,
+  EventListener,
+  InjectedNockchain,
+  SignTxResponse,
+  RpcRequest,
+  SignTxRequest,
+  SignMessageRequest,
+  SignMessageResponse,
+  ConnectRequest,
+  SendTransactionRequest,
+} from './types.js';
 import { WalletNotInstalledError, UserRejectedError, RpcError, NoAccountError } from './errors.js';
-import { PROVIDER_METHODS } from './constants.js';
+import { PROVIDER_METHODS, RPC_API_VERSION } from './constants.js';
+import { NockchainTx, Note } from '@nockbox/iris-wasm';
 
 /**
  * NockchainProvider class - Main interface for dApps to interact with Iris wallet
@@ -29,7 +42,7 @@ import { PROVIDER_METHODS } from './constants.js';
 export class NockchainProvider {
   private injected: InjectedNockchain;
   private eventListeners: Map<NockchainEvent, Set<EventListener>>;
-  private _accounts: string[] = [];
+  private _accounts: Account[] = [];
   private _chainId: string | null = null;
   private _messageHandler?: (event: MessageEvent) => void;
 
@@ -68,21 +81,21 @@ export class NockchainProvider {
    * @throws {UserRejectedError} If the user rejects the request
    * @throws {RpcError} If the RPC call fails
    */
-  async connect(): Promise<{ pkh: string; grpcEndpoint: string }> {
-    const info = await this.request<{ pkh: string; grpcEndpoint: string }>({
+  async connect(): Promise<ConnectResponse> {
+    const info = await this.request<ConnectRequest, ConnectResponse>({
       method: PROVIDER_METHODS.CONNECT,
     });
 
     // Store the PKH as the connected account
-    this._accounts = [info.pkh];
+    this._accounts = [info.account];
     return info;
   }
 
   /**
    * Get the currently connected accounts (if any)
-   * @returns Array of connected account addresses (PKH)
+   * @returns Array of connected accounts
    */
-  get accounts(): string[] {
+  get accounts(): Account[] {
     return [...this._accounts];
   }
 
@@ -110,14 +123,14 @@ export class NockchainProvider {
    * @throws {UserRejectedError} If the user rejects the transaction
    * @throws {RpcError} If the RPC call fails
    */
-  async sendTransaction(transaction: Transaction): Promise<string> {
+  async sendTransaction(transaction: SendTransactionRequest): Promise<string> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }
 
-    return this.request<string>({
+    return this.request<SendTransactionRequest, string>({
       method: PROVIDER_METHODS.SEND_TRANSACTION,
-      params: [transaction],
+      params: transaction,
     });
   }
 
@@ -129,93 +142,42 @@ export class NockchainProvider {
    * @throws {UserRejectedError} If the user rejects the signing request
    * @throws {RpcError} If the RPC call fails
    */
-  async signMessage(message: string): Promise<{ signature: string; publicKeyHex: string }> {
+  async signMessage(message: string): Promise<SignMessageResponse> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }
 
-    return this.request<{ signature: string; publicKeyHex: string }>({
+    return this.request<SignMessageRequest, SignMessageResponse>({
       method: PROVIDER_METHODS.SIGN_MESSAGE,
-      params: [message],
+      params: { message },
     });
   }
 
   /**
    * Sign a raw transaction
-   * Accepts either wasm objects (with toProtobuf() method) or protobuf JS objects
-   * @param params - The transaction parameters (rawTx, notes, spendConditions)
-   * @returns Promise resolving to the signed raw transaction as protobuf Uint8Array
+   * Input must be NockchainTx.
+   * @param tx - The transaction to sign
+   * @param notes - Optional approval-display metadata for legacy compatibility
+   * @returns Promise resolving to the signed transaction
    * @throws {NoAccountError} If no account is connected
    * @throws {UserRejectedError} If the user rejects the signing request
    * @throws {RpcError} If the RPC call fails
    *
    * @example
    * ```typescript
-   * // Option 1: Pass wasm objects directly (auto-converts to protobuf)
-   * const rawTx = builder.build();
-   * const txNotes = builder.allNotes();
-   *
-   * const signedTx = await provider.signRawTx({
-   *   rawTx: rawTx,  // wasm RawTx object
-   *   notes: txNotes.notes,  // array of wasm Note objects
-   *   spendConditions: txNotes.spendConditions  // array of wasm SpendCondition objects
-   * });
-   *
-   * // Option 2: Pass protobuf JS objects directly
-   * const signedTx = await provider.signRawTx({
-   *   rawTx: rawTxProtobufObject,  // protobuf JS object
-   *   notes: noteProtobufObjects,  // array of protobuf JS objects
-   *   spendConditions: spendCondProtobufObjects  // array of protobuf JS objects
-   * });
+   * const nockchainTx = wasm.rawTxV1ToNockchainTx(rawTx);
+   * const signedTx = await provider.signTx(nockchainTx);
    * ```
    */
-  async signRawTx(params: {
-    rawTx: any;
-    notes: any[];
-    spendConditions: any[];
-  }): Promise<Uint8Array> {
+  async signTx(tx: NockchainTx, notes?: Note[]): Promise<SignTxResponse> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }
 
-    // Helper to convert to protobuf if it's a wasm object
-    const toProtobuf = (obj: any): any => {
-      // If object has toProtobuf method, it's a wasm object - convert it
-      if (obj && typeof obj.toProtobuf === 'function') {
-        return obj.toProtobuf();
-      }
-      // Otherwise assume it's already a protobuf JS object
-      return obj;
-    };
-
-    // Convert wasm objects to protobuf (if needed)
-    const protobufParams = {
-      rawTx: toProtobuf(params.rawTx),
-      notes: params.notes.map(toProtobuf),
-      spendConditions: params.spendConditions.map(toProtobuf),
-    };
-
-    return this.request<Uint8Array>({
-      method: PROVIDER_METHODS.SIGN_RAW_TX,
-      params: [protobufParams],
+    return this.request<SignTxRequest, SignTxResponse>({
+      method: PROVIDER_METHODS.SIGN_TX,
+      params: { tx, notes },
     });
-  }
-
-  /**
-   * Create a new transaction builder
-   * @returns A new TransactionBuilder instance
-   *
-   * @example
-   * ```typescript
-   * const tx = provider.transaction()
-   *   .to('recipient_address')
-   *   .amount(1_000_000)
-   *   .fee(50_000)
-   *   .build();
-   * ```
-   */
-  transaction(): TransactionBuilder {
-    return new TransactionBuilder();
   }
 
   /**
@@ -268,9 +230,12 @@ export class NockchainProvider {
    * @throws {UserRejectedError} If the user rejects the request
    * @throws {RpcError} If the RPC call fails
    */
-  public async request<T = unknown>(args: { method: string; params?: unknown[] }): Promise<T> {
+  public async request<Req, Res>(args: RpcRequest<Req>): Promise<Res> {
     try {
-      const result = await this.injected.request<T>(args);
+      const result = await this.injected.request<Req, Res>({
+        ...args,
+        api: args.api ?? RPC_API_VERSION,
+      });
       return result;
     } catch (error) {
       // Handle RPC errors and map known error codes

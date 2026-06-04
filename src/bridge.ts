@@ -1,0 +1,604 @@
+/**
+ * Bridge utilities for Nockchain ↔ EVM bridging.
+ * Encoding uses the wasm atom/belt conversion helpers for EVM addresses.
+ * Consumers provide BridgeConfig; the SDK handles transaction construction and validation.
+ */
+
+import type {
+  BridgeConfig,
+  BridgeTransactionParams,
+  BridgeTransactionResult,
+  BridgeValidationParams,
+  BridgeValidationResult,
+  BuildBridgeTransactionOptions,
+} from './bridge-types.js';
+import type {
+  Lock,
+  LockRoot,
+  Digest,
+  NoteData,
+  NoteV1,
+  Nicks,
+  Noun,
+  RawTxV1,
+  SeedV1,
+  SpendCondition,
+} from '@nockbox/iris-wasm/iris_wasm.js';
+import { base58 } from '@scure/base';
+import * as wasm from './wasm.js';
+
+/** Simple EVM address check (0x + 40 hex chars). No checksum validation. */
+export function isEvmAddress(address: string): boolean {
+  const s = (address || '').trim();
+  const normalized = s.startsWith('0x') ? s : `0x${s}`;
+  return /^0x[0-9a-fA-F]{40}$/.test(normalized);
+}
+
+function evmAddressToAtom(address: string): string {
+  return normalizeEvmAddress(address).slice(2).replace(/^0+/, '') || '0';
+}
+
+function atomToEvmAddress(atom: string): string {
+  return `0x${atom.padStart(40, '0')}`;
+}
+
+function atomToBigint(atom: string): bigint {
+  return BigInt(`0x${atom}`);
+}
+
+function nounArray(head: Noun, ...tail: Noun[]): Noun {
+  const noun: [Noun] = [head];
+  noun.push(...tail);
+  return noun;
+}
+
+function beltTupleToNoun(belt1: bigint, belt2: bigint, belt3: bigint): Noun {
+  return nounArray(bigintToAtom(belt1), bigintToAtom(belt2), bigintToAtom(belt3));
+}
+
+function beltNounToTuple(noun: Noun): [bigint, bigint, bigint] {
+  const atoms = Array.isArray(noun) ? Array.from(noun) : null;
+  if (!Array.isArray(atoms) || atoms.length > 3 || !atoms.every(isAtom)) {
+    throw new Error('Invalid EVM address belt encoding: expected at most 3 belt atoms');
+  }
+
+  return [
+    atomToBigint(atoms[0] ?? '0'),
+    atomToBigint(atoms[1] ?? '0'),
+    atomToBigint(atoms[2] ?? '0'),
+  ];
+}
+
+/**
+ * Convert an EVM address to 3 belts through the canonical atom encoding.
+ */
+export function evmAddressToBelts(address: string): [bigint, bigint, bigint] {
+  if (!isEvmAddress(address)) {
+    throw new Error(`Invalid EVM address: ${address}`);
+  }
+
+  return beltNounToTuple(wasm.atomToBelts(evmAddressToAtom(address)));
+}
+
+/**
+ * Convert 3 belts back to an EVM address.
+ */
+export function beltsToEvmAddress(belt1: bigint, belt2: bigint, belt3: bigint): string {
+  const atom = wasm.beltsToAtom(beltTupleToNoun(belt1, belt2, belt3));
+  if (!isAtom(atom)) {
+    throw new Error('Invalid EVM address belt encoding: decoded atom is not an atom');
+  }
+  return atomToEvmAddress(atom);
+}
+
+/** Encode a bigint as hex (no 0x prefix). */
+export function bigintToAtom(n: bigint): string {
+  if (n === 0n) return '0';
+  return n.toString(16);
+}
+
+/**
+ * Build the bridge noun structure for an EVM address.
+ *
+ * Shape: `[version [chain [belt1 [belt2 belt3]]]]` — a chain of right-nested
+ * pairs with five hex-encoded atom leaves, matching the Hoon cell stored in
+ * the on-chain bridge note.
+ */
+export function buildBridgeNoun(
+  evmAddress: string,
+  config: Pick<BridgeConfig, 'chainTag' | 'versionTag'>
+): Noun {
+  const [belt1, belt2, belt3] = evmAddressToBelts(evmAddress);
+  return nounArray(
+    config.versionTag,
+    nounArray(
+      config.chainTag,
+      nounArray(bigintToAtom(belt1), nounArray(bigintToAtom(belt2), bigintToAtom(belt3)))
+    )
+  );
+}
+
+/**
+ * Verify belt encoding round-trips correctly.
+ */
+export function verifyBeltEncoding(address: string): boolean {
+  if (!isEvmAddress(address)) return false;
+  const normalized = address.toLowerCase().startsWith('0x')
+    ? address.toLowerCase()
+    : `0x${address.toLowerCase()}`;
+  const [belt1, belt2, belt3] = evmAddressToBelts(normalized);
+  const recovered = beltsToEvmAddress(belt1, belt2, belt3);
+  return normalized === recovered;
+}
+
+/**
+ * Check if a bridge config is valid and usable.
+ */
+export function isBridgeConfigured(config: BridgeConfig): boolean {
+  return (
+    config.addresses.length > 0 &&
+    config.threshold > 0 &&
+    config.threshold <= config.addresses.length
+  );
+}
+
+// TODO(iris-wasm): `isAtom` and `readPair` are adapters for `Noun`'s runtime
+// shape, not bridge logic. They should live alongside `cue`/`jam` in
+// `iris-wasm` (ideally replaced by a proper `nounToJs` that returns nested
+// pairs). Keep them here until that package exposes an equivalent.
+
+/**
+ * Type guard: is this noun an atom (a leaf, represented as a hex string)?
+ *
+ * After this returns `true` TypeScript narrows the noun to `string`, so
+ * callers can use the value directly without a separate rebinding.
+ */
+function isAtom(noun: Noun | undefined): noun is string {
+  return typeof noun === 'string';
+}
+
+/**
+ * Read one `[head, tail]` pair out of a noun.
+ *
+ * A noun is either an atom (string) or a pair of nouns. On-chain the bridge
+ * note is stored as a chain of right-nested pairs: `[v [c [b1 [b2 b3]]]]`.
+ *
+ * The wasm we use here returns that nested structure to JS in a *flattened*
+ * form: instead of `["v", ["c", ["b1", ["b2", "b3"]]]]` we receive
+ * `["v", "c", "b1", "b2", "b3"]`. Same data, same pairing intent, just
+ * collapsed by the serializer on the way across the JS boundary.
+ *
+ * To read it back as logical pairs we treat the flat array as
+ * `[head, ...tail]`: the first element is this pair's head, and everything
+ * after it is the tail (itself another noun). This function applies that
+ * convention once; call it repeatedly to walk the chain.
+ *
+ * Returns `null` if the noun is not a pair (e.g. an atom, or malformed).
+ */
+function readPair(noun: Noun | undefined): [Noun, Noun] | null {
+  // The wasm `Noun` type is declared as `string | [Noun]`, but at runtime a
+  // pair arrives as a flat array of length >= 2. Copy it into a normal array
+  // so we can inspect the real shape.
+  const arr = Array.isArray(noun) ? Array.from(noun) : null;
+  if (!arr || arr.length < 2) return null;
+  const head = arr[0];
+  const tail = arr.length === 2 ? arr[1] : nounArray(arr[1], ...arr.slice(2));
+  return [head, tail];
+}
+
+function parseDigestString(value: string, field: string): Digest {
+  const trimmed = value.trim();
+  const bytes = base58.decode(trimmed);
+  if (bytes.length !== 40) {
+    throw new Error(`Invalid ${field}: expected a 40-byte base58 digest`);
+  }
+  return trimmed as Digest;
+}
+
+function normalizeEvmAddress(address: string): string {
+  const trimmed = address.trim();
+  const withPrefix = trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`;
+  return withPrefix.toLowerCase();
+}
+
+function noteDataHasKey(noteData: NoteData | undefined, key: string): boolean {
+  if (!Array.isArray(noteData)) return false;
+  return noteData.some(entry => Array.isArray(entry) && entry[0] === key);
+}
+
+function digestFromLockRoot(lockRoot: LockRoot): string {
+  if (typeof lockRoot === 'string') {
+    return lockRoot;
+  }
+  return wasm.lockRootHash(lockRoot);
+}
+
+function collectBridgeSeeds(rawTx: RawTxV1, noteDataKey: string): SeedV1[] {
+  const bridgeSeeds: SeedV1[] = [];
+  for (const [, spend] of rawTx.spends) {
+    for (const seed of spend.seeds) {
+      if (noteDataHasKey(seed.note_data, noteDataKey)) {
+        bridgeSeeds.push(seed);
+      }
+    }
+  }
+  return bridgeSeeds;
+}
+
+/** Read V1 output note data*/
+function bridgeOutputData(
+  note: NoteV1,
+  noteDataKey: string
+): { assets: bigint; noteData: Noun } | null {
+  const entry = note.note_data.find(
+    (row): row is [string, Noun] => Array.isArray(row) && row[0] === noteDataKey
+  );
+  if (!entry) return null;
+  return {
+    assets: BigInt(note.assets ?? 0),
+    noteData: entry[1],
+  };
+}
+
+/**
+ * Derive the bridge multisig lock root from config (same path as buildBridgeTransaction).
+ */
+export function computeBridgeLockRoot(config: BridgeConfig): string {
+  const bridgePkh = wasm.pkhNew(
+    BigInt(config.threshold),
+    config.addresses.map(address => parseDigestString(address, 'bridge address'))
+  );
+  const bridgeSpendCondition = wasm.spendConditionNewPkh(bridgePkh);
+  return wasm.lockHash(bridgeSpendCondition);
+}
+
+function computeRefundLockRoot(refundPkh: string): string {
+  const refundPkhObj = wasm.pkhSingle(parseDigestString(refundPkh, 'refund pkh'));
+  const refundSpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
+  return wasm.lockHash(refundSpendCondition);
+}
+
+/**
+ * Create jammed bridge note data for an EVM address (requires WASM).
+ * Caller must have initialized WASM (e.g. await wasm.default()) before using.
+ */
+export async function createBridgeNoteData(
+  evmAddress: string,
+  config: BridgeConfig
+): Promise<Uint8Array> {
+  const nounJs = buildBridgeNoun(evmAddress, config);
+  return wasm.jam(nounJs);
+}
+
+/**
+ * Build a bridge transaction (requires WASM).
+ * Consumer supplies notes and spend conditions; SDK builds the tx from config.
+ */
+export async function buildBridgeTransaction(
+  params: BridgeTransactionParams,
+  config: BridgeConfig,
+  options: BuildBridgeTransactionOptions
+): Promise<BridgeTransactionResult> {
+  if (!isBridgeConfigured(config)) {
+    throw new Error('Bridge not configured');
+  }
+  if (!options?.txEngineSettings) {
+    throw new Error('txEngineSettings is required in options (see BuildBridgeTransactionOptions)');
+  }
+  if (!isEvmAddress(params.destinationAddress)) {
+    throw new Error(`Invalid destination address: ${params.destinationAddress}`);
+  }
+  if (params.inputNotes.length !== params.spendConditions.length) {
+    throw new Error(
+      `Input note/spend condition length mismatch: ${params.inputNotes.length} notes vs ${params.spendConditions.length} conditions`
+    );
+  }
+
+  const bridgeNounJs = buildBridgeNoun(params.destinationAddress, config);
+  const noteData: NoteData = [[config.noteDataKey, bridgeNounJs]];
+
+  const bridgePkh = wasm.pkhNew(
+    BigInt(config.threshold),
+    config.addresses.map(address => parseDigestString(address, 'bridge address'))
+  );
+  const bridgeSpendCondition: SpendCondition = wasm.spendConditionNewPkh(bridgePkh);
+  const bridgeLockRoot: LockRoot = bridgeSpendCondition;
+  const refundPkhObj = wasm.pkhSingle(parseDigestString(params.refundPkh, 'refund pkh'));
+  const refundSpendCondition: SpendCondition = wasm.spendConditionNewPkh(refundPkhObj);
+  const refundLockRoot: LockRoot = refundSpendCondition;
+
+  const builder = new wasm.TxBuilder(options.txEngineSettings);
+
+  try {
+    let remainingGift = BigInt(params.amountInNicks);
+
+    for (let i = 0; i < params.inputNotes.length; i++) {
+      const note = params.inputNotes[i];
+      const spendCondition = params.spendConditions[i];
+      if (!spendCondition) {
+        throw new Error('Spend condition is missing for this input note');
+      }
+      const noteAssets = BigInt(note.assets ?? 0);
+
+      const giftPortion = remainingGift < noteAssets ? remainingGift : noteAssets;
+      remainingGift -= giftPortion;
+
+      let spendBuilder: InstanceType<typeof wasm.SpendBuilder> | undefined;
+      try {
+        spendBuilder = new wasm.SpendBuilder(note, spendCondition, 0, refundLockRoot);
+
+        if (giftPortion > 0n) {
+          const parentHash = wasm.noteHash(note);
+          const seed: SeedV1 = {
+            output_source: null,
+            lock_root: bridgeLockRoot,
+            note_data: noteData,
+            gift: giftPortion.toString() as Nicks,
+            parent_hash: parentHash,
+          };
+          spendBuilder.seed(seed);
+        }
+
+        spendBuilder.computeRefund(false);
+        builder.spend(spendBuilder);
+        spendBuilder = undefined;
+      } finally {
+        spendBuilder?.free();
+      }
+    }
+
+    if (remainingGift > 0n) {
+      const requestedGift = BigInt(params.amountInNicks);
+      const fundedGift = requestedGift - remainingGift;
+      throw new Error(
+        `Insufficient input note assets for bridge amount: requested ${requestedGift.toString()} nicks, funded ${fundedGift.toString()} nicks, shortfall ${remainingGift.toString()} nicks`
+      );
+    }
+
+    builder.recalcAndSetFee(false);
+    const feeResult = builder.curFee();
+    const transaction = builder.build();
+
+    const txId = transaction.id;
+    const fee = feeResult;
+
+    return {
+      transaction,
+      txId,
+      fee,
+    };
+  } finally {
+    builder.free();
+  }
+}
+
+/**
+ * Validate a bridge transaction (pre- or post-signing).
+ * Uses config for note key, min amount, and optional lock root.
+ */
+export async function validateBridgeTransaction(
+  rawTx: RawTxV1,
+  params: BridgeValidationParams,
+  config: BridgeConfig,
+  options: BuildBridgeTransactionOptions
+): Promise<BridgeValidationResult> {
+  if (!options?.txEngineSettings) {
+    throw new Error('txEngineSettings is required in options (see BuildBridgeTransactionOptions)');
+  }
+  if (!isEvmAddress(params.destinationAddress)) {
+    return { valid: false, error: `Invalid destination address: ${params.destinationAddress}` };
+  }
+  try {
+    const bridgeLockRoot = computeBridgeLockRoot(config);
+    if (config.expectedLockRoot && config.expectedLockRoot !== bridgeLockRoot) {
+      return {
+        valid: false,
+        error: 'Bridge configuration lock root does not match configured bridge signer set',
+      };
+    }
+    const refundLockRoot = computeRefundLockRoot(params.refundPkh);
+
+    const bridgeSeeds = collectBridgeSeeds(rawTx, config.noteDataKey);
+    if (bridgeSeeds.length === 0) {
+      return {
+        valid: false,
+        error: `No bridge seed with '${config.noteDataKey}' note data found in transaction spends`,
+      };
+    }
+
+    let bridgeSeedGiftTotal = 0n;
+    for (const [, spend] of rawTx.spends) {
+      for (const seed of spend.seeds) {
+        const seedLockRoot = digestFromLockRoot(seed.lock_root);
+        if (noteDataHasKey(seed.note_data, config.noteDataKey)) {
+          if (seedLockRoot !== bridgeLockRoot) {
+            return {
+              valid: false,
+              error: `Bridge seed lock root mismatch: expected ${bridgeLockRoot}, got ${seedLockRoot}`,
+            };
+          }
+          bridgeSeedGiftTotal += BigInt(seed.gift ?? 0);
+        } else if (seedLockRoot !== refundLockRoot) {
+          return {
+            valid: false,
+            error: `Refund seed lock root mismatch: expected ${refundLockRoot}, got ${seedLockRoot}`,
+          };
+        }
+      }
+    }
+
+    const outputs = wasm.rawTxV1Outputs(rawTx, 0, options.txEngineSettings);
+
+    if (outputs.length === 0) {
+      return { valid: false, error: 'Transaction has no outputs' };
+    }
+
+    let bridgeOutput: ReturnType<typeof bridgeOutputData> = null;
+    for (const output of outputs) {
+      bridgeOutput = bridgeOutputData(output, config.noteDataKey);
+      if (bridgeOutput) break;
+    }
+
+    if (!bridgeOutput) {
+      return {
+        valid: false,
+        error: `No output with '${config.noteDataKey}' note data found in transaction`,
+      };
+    }
+
+    if (BigInt(bridgeOutput.assets) < BigInt(config.minAmountNicks)) {
+      return {
+        valid: false,
+        error: `Bridge amount ${bridgeOutput.assets} nicks is below minimum ${config.minAmountNicks} nicks`,
+      };
+    }
+
+    if (bridgeSeedGiftTotal !== BigInt(bridgeOutput.assets)) {
+      return {
+        valid: false,
+        error: `Bridge seed gifts (${bridgeSeedGiftTotal} nicks) do not match bridge output (${bridgeOutput.assets} nicks)`,
+      };
+    }
+
+    const expectedAmount = BigInt(params.amountInNicks);
+    if (BigInt(bridgeOutput.assets) !== expectedAmount) {
+      return {
+        valid: false,
+        error: `Bridge amount mismatch: expected ${expectedAmount} nicks, got ${bridgeOutput.assets} nicks`,
+      };
+    }
+
+    let destinationAddress: string | undefined;
+    let belts: [bigint, bigint, bigint] | undefined;
+    let validatedVersion: string | undefined;
+    let validatedChain: string | undefined;
+    const validatedNoteDataKey = config.noteDataKey;
+
+    try {
+      // Walk the native note-data noun as a chain of right-nested pairs:
+      // [version [chain [belt1 [belt2 belt3]]]].
+      const noun = bridgeOutput.noteData;
+
+      const versionPair = readPair(noun);
+      if (!versionPair) {
+        return {
+          valid: false,
+          error: 'Invalid bridge note data structure: expected [version, [chain, belts]]',
+        };
+      }
+      const [version, chainAndBelts] = versionPair;
+      if (!isAtom(version)) {
+        return { valid: false, error: 'Invalid bridge note data: version is not an atom' };
+      }
+      if (version !== config.versionTag && version !== String(Number(config.versionTag))) {
+        return {
+          valid: false,
+          error: `Invalid bridge note data version: expected ${config.versionTag}, got ${version}`,
+        };
+      }
+      validatedVersion = version;
+
+      const chainPair = readPair(chainAndBelts);
+      if (!chainPair) {
+        return { valid: false, error: 'Invalid bridge note data: missing chain and belts' };
+      }
+      const [chain, beltData] = chainPair;
+      if (!isAtom(chain) || chain !== config.chainTag) {
+        return {
+          valid: false,
+          error: `Invalid bridge chain: expected ${config.chainTag}, got ${String(chain)}`,
+        };
+      }
+      validatedChain = chain;
+
+      const belt1Pair = readPair(beltData);
+      if (!belt1Pair) {
+        return { valid: false, error: 'Invalid bridge note data: invalid belt structure' };
+      }
+      const [belt1Noun, belt2And3] = belt1Pair;
+
+      const belt2Pair = readPair(belt2And3);
+      if (!belt2Pair) {
+        return { valid: false, error: 'Invalid bridge note data: invalid belt2/belt3 structure' };
+      }
+      const [belt2Noun, belt3Noun] = belt2Pair;
+
+      if (!isAtom(belt1Noun) || !isAtom(belt2Noun) || !isAtom(belt3Noun)) {
+        return { valid: false, error: 'Invalid bridge note data: belt values are not atoms' };
+      }
+
+      const belt1 = BigInt('0x' + belt1Noun);
+      const belt2 = BigInt('0x' + belt2Noun);
+      const belt3 = BigInt('0x' + belt3Noun);
+      belts = [belt1, belt2, belt3];
+      destinationAddress = beltsToEvmAddress(belt1, belt2, belt3);
+
+      if (!isEvmAddress(destinationAddress)) {
+        return {
+          valid: false,
+          error: `Reconstructed address is invalid: ${destinationAddress}`,
+        };
+      }
+
+      const expectedDestination = normalizeEvmAddress(params.destinationAddress);
+      const actualDestination = normalizeEvmAddress(destinationAddress);
+      if (expectedDestination !== actualDestination) {
+        return {
+          valid: false,
+          error: `Destination address mismatch: expected ${expectedDestination}, got ${actualDestination}`,
+        };
+      }
+    } catch (err) {
+      return {
+        valid: false,
+        error: `Failed to decode bridge note data: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+
+    return {
+      valid: true,
+      bridgeAmountNicks: bridgeOutput.assets.toString() as Nicks,
+      destinationAddress,
+      belts,
+      noteDataKey: validatedNoteDataKey,
+      version: validatedVersion,
+      chain: validatedChain,
+      bridgeLockRoot,
+    };
+  } catch (err) {
+    return {
+      valid: false,
+      error: `Transaction validation failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Validate and throw if invalid (convenience wrapper).
+ */
+export async function assertValidBridgeTransaction(
+  rawTx: RawTxV1,
+  context: 'pre-signing' | 'post-signing',
+  params: BridgeValidationParams,
+  config: BridgeConfig,
+  options: BuildBridgeTransactionOptions
+): Promise<BridgeValidationResult> {
+  const result = await validateBridgeTransaction(rawTx, params, config, options);
+  if (!result.valid) {
+    throw new Error(`${context} validation failed: ${result.error}`);
+  }
+  return result;
+}
+
+// Re-export types
+export type {
+  BridgeConfig,
+  BridgeTransactionParams,
+  BridgeTransactionResult,
+  BridgeValidationParams,
+  BridgeValidationResult,
+  BuildBridgeTransactionOptions,
+  TxEngineSettings,
+} from './bridge-types.js';

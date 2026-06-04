@@ -1,6 +1,6 @@
 {
   "name": "@nockbox/iris-sdk",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "TypeScript SDK for interacting with Iris wallet extension",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./wasm": {
+      "types": "./dist/wasm.d.ts",
+      "import": "./dist/wasm.js"
     }
   },
   "files": [
@@ -16,8 +20,8 @@
     "README.md"
   ],
   "scripts": {
-    "prepare": "npm run build",
     "build": "tsc",
+    "prepare": "npm run build",
     "build-example": "npm run build && tsc --project examples/tsconfig.json && vite build --config vite.config.examples.ts",
     "dev": "tsc --watch",
     "dev-example": "vite --config vite.config.examples.ts",
@@ -37,16 +41,16 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "prettier": "^3.4.2",
     "typescript": "^5.5.3",
-    "vite": "^5.0.0",
-    "prettier": "^3.4.2"
+    "vite": "^5.0.0"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/nockbox/iris-sdk.git"
   },
   "dependencies": {
-    "@scure/base": "^2.0.0",
-    "@nockbox/iris-wasm": "^0.1.1"
+    "@nockbox/iris-wasm": "0.2.0",
+    "@scure/base": "^2.0.0"
   }
 }

@@ -226,7 +226,10 @@ function collectBridgeSeeds(rawTx: RawTxV1, noteDataKey: string): SeedV1[] {
 }
 
 /** Read V1 output note data*/
-function bridgeOutputData(note: NoteV1, noteDataKey: string): { assets: bigint; noteData: Noun } | null {
+function bridgeOutputData(
+  note: NoteV1,
+  noteDataKey: string
+): { assets: bigint; noteData: Noun } | null {
   const entry = note.note_data.find(
     (row): row is [string, Noun] => Array.isArray(row) && row[0] === noteDataKey
   );
@@ -322,12 +325,7 @@ export async function buildBridgeTransaction(
 
       let spendBuilder: InstanceType<typeof wasm.SpendBuilder> | undefined;
       try {
-        spendBuilder = new wasm.SpendBuilder(
-          note,
-          spendCondition,
-          0,
-          refundLockRoot
-        );
+        spendBuilder = new wasm.SpendBuilder(note, spendCondition, 0, refundLockRoot);
 
         if (giftPortion > 0n) {
           const parentHash = wasm.noteHash(note);

@@ -15,6 +15,8 @@ import type {
   SignMessageResponse,
   ConnectRequest,
   SendTransactionRequest,
+  EstimateTransactionFeeRequest,
+  EstimateTransactionFeeResponse,
 } from './types.js';
 import { WalletNotInstalledError, UserRejectedError, RpcError, NoAccountError } from './errors.js';
 import { PROVIDER_METHODS, RPC_API_VERSION } from './constants.js';
@@ -131,6 +133,37 @@ export class NockchainProvider {
     return this.request<SendTransactionRequest, string>({
       method: PROVIDER_METHODS.SEND_TRANSACTION,
       params: transaction,
+    });
+  }
+
+  /**
+   * Estimate the network fee for a simple send without sending it.
+   * Read-only: requires an approved origin and unlocked wallet, but shows no approval popup.
+   * Requires API 1 (`nock_estimateTransactionFee` is not available on legacy API 0 wallets).
+   *
+   * The estimate is advisory: it depends on the wallet's current UTXO set and may
+   * drift slightly between estimation and an actual send.
+   *
+   * @param request - Recipient and amount in nicks
+   * @returns Promise resolving to the estimated fee in nicks
+   * @throws {NoAccountError} If no account is connected
+   * @throws {RpcError} If the RPC call fails (e.g. wallet locked, no UTXOs)
+   *
+   * @example
+   * ```typescript
+   * const { fee } = await provider.estimateTransactionFee({ to: recipient, amount });
+   * ```
+   */
+  async estimateTransactionFee(
+    request: EstimateTransactionFeeRequest
+  ): Promise<EstimateTransactionFeeResponse> {
+    if (!this.isConnected) {
+      throw new NoAccountError();
+    }
+
+    return this.request<EstimateTransactionFeeRequest, EstimateTransactionFeeResponse>({
+      method: PROVIDER_METHODS.ESTIMATE_TRANSACTION_FEE,
+      params: request,
     });
   }
 

@@ -83,8 +83,25 @@ export interface SendTransactionRequest {
   to: Address;
   /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
   amount: Nicks;
-  /** Transaction fee in nicks (legacy number + canonical string/bigint accepted) */
+  /**
+   * Transaction fee in nicks (legacy number + canonical string/bigint accepted).
+   * Optional: when omitted, the wallet estimates the fee, shows it in the approval
+   * popup, and auto-calculates the exact fee at build time. The send response
+   * reports the actual fee used.
+   */
   fee?: Nicks;
+}
+
+export interface EstimateTransactionFeeRequest {
+  /** Recipient address (base58-encoded public key hash / PKH) */
+  to: Address;
+  /** Amount to send in nicks */
+  amount: Nicks;
+}
+
+export interface EstimateTransactionFeeResponse {
+  /** Estimated fee in nicks (canonical string) */
+  fee: Nicks;
 }
 
 export interface SignTxRequest {

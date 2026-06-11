@@ -22,6 +22,9 @@ export const PROVIDER_METHODS = {
 
   /** Sign a nockchain transaction */
   SIGN_TX: 'nock_signTx',
+
+  /** Estimate the network fee for a simple send (read-only, no approval popup) */
+  ESTIMATE_TRANSACTION_FEE: 'nock_estimateTransactionFee',
 } as const;
 
 export type ProviderMethod = (typeof PROVIDER_METHODS)[keyof typeof PROVIDER_METHODS];

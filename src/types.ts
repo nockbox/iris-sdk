@@ -95,7 +95,7 @@ export interface SendTransactionRequest {
 export interface EstimateTransactionFeeRequest {
   /** Recipient address (base58-encoded public key hash / PKH) */
   to: Address;
-  /** Amount to send in nicks */
+  /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
   amount: Nicks;
 }
 

@@ -90,8 +90,11 @@ export interface SendTransactionRequest {
 export interface SignTxRequest {
   tx: NockchainTx;
   /**
-   * Optional input notes supplied for approval display and API 0 wallet compatibility.
-   * The canonical signer consumes `tx`; notes are sidecar metadata.
+   * Optional untrusted sidecar notes retained for API 0 wallet compatibility.
+   *
+   * Wallets MUST NOT use these notes as the authoritative approval display or
+   * assume they describe `tx`. Review data must be derived from `tx` and, where
+   * available, independently matched to wallet-owned state.
    */
   notes?: Note[];
 }

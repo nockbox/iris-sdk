@@ -157,7 +157,8 @@ export class NockchainProvider {
    * Sign a raw transaction
    * Input must be NockchainTx.
    * @param tx - The transaction to sign
-   * @param notes - Optional approval-display metadata for legacy compatibility
+   * @param notes - Optional untrusted sidecar metadata for API 0 compatibility.
+   * Wallets must independently derive or verify any approval display.
    * @returns Promise resolving to the signed transaction
    * @throws {NoAccountError} If no account is connected
    * @throws {UserRejectedError} If the user rejects the signing request
@@ -288,8 +289,8 @@ export class NockchainProvider {
 
       const payload = event.data;
 
-      // SECURITY: Verify the message is from Iris extension
-      // This prevents malicious scripts from forging wallet events
+      // Advisory brand only: any script in the page realm can forge postMessage
+      // events with this field. Events must never be used as authorization.
       if (!payload || payload.__iris !== true) return;
 
       // Check if this is a valid wallet event

@@ -15,6 +15,7 @@ import type {
   SignMessageResponse,
   ConnectRequest,
   SendTransactionRequest,
+  SendTransactionResponse,
   EstimateTransactionFeeRequest,
   EstimateTransactionFeeResponse,
 } from './types.js';
@@ -38,7 +39,7 @@ import { NockchainTx, Note } from '@nockbox/iris-wasm';
  *   .amount(1_000_000)
  *   .build();
  *
- * const txId = await nockchain.sendTransaction(tx);
+ * const { txid, fee } = await nockchain.sendTransaction(tx);
  * ```
  */
 export class NockchainProvider {
@@ -120,17 +121,18 @@ export class NockchainProvider {
   /**
    * Send a transaction
    * @param transaction - The transaction object to send
-   * @returns Promise resolving to the transaction ID
+   * @returns Promise resolving to the transaction ID and, for API 1 wallets,
+   * the canonical amount and actual fee used by the built transaction
    * @throws {NoAccountError} If no account is connected
    * @throws {UserRejectedError} If the user rejects the transaction
    * @throws {RpcError} If the RPC call fails
    */
-  async sendTransaction(transaction: SendTransactionRequest): Promise<string> {
+  async sendTransaction(transaction: SendTransactionRequest): Promise<SendTransactionResponse> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }
 
-    return this.request<SendTransactionRequest, string>({
+    return this.request<SendTransactionRequest, SendTransactionResponse>({
       method: PROVIDER_METHODS.SEND_TRANSACTION,
       params: transaction,
     });

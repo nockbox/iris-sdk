@@ -4,7 +4,7 @@
 
 import type {
   SendTransactionRequest,
-  NicksLike,
+  SendTransactionResponse,
   RpcRequest,
   RpcResponse,
   ConnectRequest,
@@ -242,6 +242,36 @@ function mapResponse(
           pkh: v1.account.address,
         };
         return { ...response, result };
+      }
+      return response;
+    }
+    case PROVIDER_METHODS.SEND_TRANSACTION: {
+      if (!fromV1 && toV1) {
+        // Legacy wallets historically returned a bare transaction ID. Normalize
+        // it so API 1 callers always receive the object response shape.
+        if (typeof response.result === 'string') {
+          const result: SendTransactionResponse = { txid: response.result };
+          return { ...response, result };
+        }
+
+        const result = response.result as Partial<SendTransactionResponse> | undefined;
+        if (typeof result?.txid === 'string') {
+          return response;
+        }
+        throw new Error('Invalid legacy sendTransaction response');
+      }
+      if (fromV1 && !toV1) {
+        // Preserve the API 0 response contract for legacy callers. Be tolerant
+        // of an already-normalized bare ID to avoid double conversion.
+        if (typeof response.result === 'string') {
+          return response;
+        }
+
+        const result = response.result as Partial<SendTransactionResponse> | undefined;
+        if (typeof result?.txid !== 'string') {
+          throw new Error('Invalid sendTransaction response');
+        }
+        return { ...response, result: result.txid };
       }
       return response;
     }

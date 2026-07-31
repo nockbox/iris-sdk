@@ -82,12 +82,27 @@ export interface SendTransactionRequest {
   /** Recipient address (base58-encoded public key hash / PKH) */
   to: Address;
   /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
-  amount: Nicks;
+  amount: NicksLike;
   /**
    * Transaction fee in nicks (legacy number + canonical string/bigint accepted).
-   * Optional: when omitted, the wallet estimates the fee, shows it in the approval
-   * popup, and auto-calculates the exact fee at build time. The send response
-   * reports the actual fee used.
+   * When provided, this is the exact fee the wallet must use. When omitted, the
+   * wallet may show an advisory estimate for approval and calculates the actual
+   * fee while building the transaction.
+   */
+  fee?: NicksLike;
+}
+
+export interface SendTransactionResponse {
+  /** Broadcast transaction ID. */
+  txid: string;
+  /**
+   * Amount sent in canonical nicks. API 1 wallets include this field; it is
+   * optional only when an API 1 request is bridged to a legacy API 0 wallet.
+   */
+  amount?: Nicks;
+  /**
+   * Actual fee used by the built transaction in canonical nicks. API 1 wallets
+   * include this field; it is optional only for legacy API 0 responses.
    */
   fee?: Nicks;
 }
@@ -96,11 +111,14 @@ export interface EstimateTransactionFeeRequest {
   /** Recipient address (base58-encoded public key hash / PKH) */
   to: Address;
   /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
-  amount: Nicks;
+  amount: NicksLike;
 }
 
 export interface EstimateTransactionFeeResponse {
-  /** Estimated fee in nicks (canonical string) */
+  /**
+   * Advisory fee estimate in canonical nicks. The actual fee reported by a
+   * later send may differ if wallet state or transaction construction changes.
+   */
   fee: Nicks;
 }
 

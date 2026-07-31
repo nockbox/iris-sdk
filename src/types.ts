@@ -5,7 +5,8 @@
 import { Nicks, TxEngineSettings, PublicKey, Signature, Digest, NockchainTx, Note } from './wasm';
 
 /**
- * Transaction object representing a Nockchain transaction
+ * SDK-friendly nicks input. Bigints are normalized to canonical strings before
+ * crossing the browser-extension RPC boundary.
  */
 export type NicksLike = number | Nicks | bigint;
 
@@ -81,10 +82,10 @@ export interface SignMessageResponse {
 export interface SendTransactionRequest {
   /** Recipient address (base58-encoded public key hash / PKH) */
   to: Address;
-  /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
+  /** Amount to send in nicks (legacy number + canonical string or SDK bigint accepted) */
   amount: NicksLike;
   /**
-   * Transaction fee in nicks (legacy number + canonical string/bigint accepted).
+   * Transaction fee in nicks (legacy number + canonical string or SDK bigint accepted).
    * When provided, this is the exact fee the wallet must use. When omitted, the
    * wallet may show an advisory estimate for approval and calculates the actual
    * fee while building the transaction.
@@ -110,7 +111,7 @@ export interface SendTransactionResponse {
 export interface EstimateTransactionFeeRequest {
   /** Recipient address (base58-encoded public key hash / PKH) */
   to: Address;
-  /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
+  /** Amount to send in nicks (legacy number + canonical string or SDK bigint accepted) */
   amount: NicksLike;
 }
 

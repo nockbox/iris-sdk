@@ -18,10 +18,16 @@ import type {
   SendTransactionResponse,
   EstimateTransactionFeeRequest,
   EstimateTransactionFeeResponse,
+  NicksLike,
 } from './types.js';
 import { WalletNotInstalledError, UserRejectedError, RpcError, NoAccountError } from './errors.js';
 import { PROVIDER_METHODS, RPC_API_VERSION } from './constants.js';
 import { NockchainTx, Note } from '@nockbox/iris-wasm';
+
+/** Chrome extension messaging cannot serialize bigint values. */
+function normalizeNicksForRpc(value: NicksLike): Exclude<NicksLike, bigint> {
+  return typeof value === 'bigint' ? (value.toString() as Exclude<NicksLike, bigint>) : value;
+}
 
 /**
  * NockchainProvider class - Main interface for dApps to interact with Iris wallet
@@ -132,9 +138,17 @@ export class NockchainProvider {
       throw new NoAccountError();
     }
 
+    const normalizedTransaction: SendTransactionRequest = {
+      ...transaction,
+      amount: normalizeNicksForRpc(transaction.amount),
+    };
+    if (transaction.fee !== undefined) {
+      normalizedTransaction.fee = normalizeNicksForRpc(transaction.fee);
+    }
+
     return this.request<SendTransactionRequest, SendTransactionResponse>({
       method: PROVIDER_METHODS.SEND_TRANSACTION,
-      params: transaction,
+      params: normalizedTransaction,
     });
   }
 
@@ -163,9 +177,14 @@ export class NockchainProvider {
       throw new NoAccountError();
     }
 
+    const normalizedRequest: EstimateTransactionFeeRequest = {
+      ...request,
+      amount: normalizeNicksForRpc(request.amount),
+    };
+
     return this.request<EstimateTransactionFeeRequest, EstimateTransactionFeeResponse>({
       method: PROVIDER_METHODS.ESTIMATE_TRANSACTION_FEE,
-      params: request,
+      params: normalizedRequest,
     });
   }
 

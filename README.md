@@ -35,3 +35,16 @@ security status is explicitly advisory.
 - `estimateTransactionFee` is read-only and advisory. Wallet state can change
   between estimation and approval, so dApps must use the fee returned by
   `sendTransaction` as the final value.
+- SDK methods accept bigint nicks and normalize them to canonical strings before
+  crossing the Chrome extension messaging boundary. Direct low-level provider
+  requests should use canonical strings or legacy safe integers.
+
+## 0.3 migration notes
+
+- **TypeScript breaking change:** `sendTransaction()` is now typed as returning
+  `{ txid, amount?, fee? }` instead of `string`. This corrects the API 1 type to
+  match the object Iris already returns at runtime. Update code that treated the
+  result itself as the transaction ID to read `result.txid` instead.
+- API 0 retains its historical bare transaction-ID response. When an API 1
+  wallet response is bridged to an API 0 caller, the compatibility layer returns
+  the bare `txid` string; API 1 callers receive the object response.

@@ -4,7 +4,7 @@
 
 import type {
   SendTransactionRequest,
-  NicksLike,
+  SendTransactionResponse,
   RpcRequest,
   RpcResponse,
   ConnectRequest,
@@ -106,6 +106,12 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
         const params = request.params as SendTransactionRequest[] | undefined;
         return { ...request, params: params?.[0] };
       }
+      return request;
+    }
+    case PROVIDER_METHODS.BUILD_SIMPLE_TRANSACTION: {
+      // This primitive was introduced with API 1. Keep the method and payload
+      // intact across an API boundary so compatible direct callers still work;
+      // older wallets can return their normal method-not-found error.
       return request;
     }
     case PROVIDER_METHODS.SIGN_MESSAGE: {
@@ -243,6 +249,41 @@ function mapResponse(
         };
         return { ...response, result };
       }
+      return response;
+    }
+    case PROVIDER_METHODS.SEND_TRANSACTION: {
+      if (!fromV1 && toV1) {
+        // Legacy wallets historically returned a bare transaction ID. Normalize
+        // it so API 1 callers always receive the object response shape.
+        if (typeof response.result === 'string') {
+          const result: SendTransactionResponse = { txid: response.result };
+          return { ...response, result };
+        }
+
+        const result = response.result as Partial<SendTransactionResponse> | undefined;
+        if (typeof result?.txid === 'string') {
+          return response;
+        }
+        throw new Error('Invalid legacy sendTransaction response');
+      }
+      if (fromV1 && !toV1) {
+        // Preserve the API 0 response contract for legacy callers. Be tolerant
+        // of an already-normalized bare ID to avoid double conversion.
+        if (typeof response.result === 'string') {
+          return response;
+        }
+
+        const result = response.result as Partial<SendTransactionResponse> | undefined;
+        if (typeof result?.txid !== 'string') {
+          throw new Error('Invalid sendTransaction response');
+        }
+        return { ...response, result: result.txid };
+      }
+      return response;
+    }
+    case PROVIDER_METHODS.BUILD_SIMPLE_TRANSACTION: {
+      // No legacy response remapping is defined. Successful results therefore
+      // pass through unchanged; errors are returned by the early guard above.
       return response;
     }
     case PROVIDER_METHODS.SIGN_MESSAGE: {

@@ -1,6 +1,6 @@
 {
   "name": "@nockbox/iris-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "TypeScript SDK for interacting with Iris wallet extension",
   "type": "module",
   "main": "./dist/index.js",
@@ -27,6 +27,7 @@
     "dev-example": "vite --config vite.config.examples.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },

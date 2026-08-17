@@ -5,7 +5,8 @@
 import { Nicks, TxEngineSettings, PublicKey, Signature, Digest, NockchainTx, Note } from './wasm';
 
 /**
- * Transaction object representing a Nockchain transaction
+ * SDK-friendly nicks input. Bigints are normalized to canonical strings before
+ * crossing the browser-extension RPC boundary.
  */
 export type NicksLike = number | Nicks | bigint;
 
@@ -78,13 +79,104 @@ export interface SignMessageResponse {
   publicKey: PublicKey;
 }
 
+/**
+ * Parameters for constructing a simple wallet-funded transaction.
+ *
+ * Iris selects the inputs and directs change back to the connected account.
+ */
+export interface BuildSimpleTransactionRequest {
+  /** Recipient address (base58-encoded public key hash / PKH) */
+  to: Digest;
+  /** Amount to send in nicks (legacy number + canonical string or SDK bigint accepted) */
+  amount: NicksLike;
+  /**
+   * Transaction fee in nicks (legacy number + canonical string or SDK bigint accepted).
+   * When provided, this is the exact fee the wallet must use. When omitted, the
+   * wallet calculates and encodes the fee while building the transaction.
+   */
+  fee?: NicksLike;
+}
+
 export interface SendTransactionRequest {
   /** Recipient address (base58-encoded public key hash / PKH) */
   to: Address;
-  /** Amount to send in nicks (legacy number + canonical string/bigint accepted) */
-  amount: Nicks;
-  /** Transaction fee in nicks (legacy number + canonical string/bigint accepted) */
+  /** Amount to send in nicks (legacy number + canonical string or SDK bigint accepted) */
+  amount: NicksLike;
+  /**
+   * Transaction fee in nicks (legacy number + canonical string or SDK bigint accepted).
+   * When provided, this is the exact fee the wallet must use. When omitted, the
+   * wallet may show an advisory estimate for approval and calculates the actual
+   * fee while building the transaction.
+   */
+  fee?: NicksLike;
+}
+
+export interface SendTransactionResponse {
+  /** Broadcast transaction ID. */
+  txid: string;
+  /**
+   * Amount sent in canonical nicks. API 1 wallets include this field; it is
+   * optional only when an API 1 request is bridged to a legacy API 0 wallet.
+   */
+  amount?: Nicks;
+  /**
+   * Actual fee used by the built transaction in canonical nicks. API 1 wallets
+   * include this field; it is optional only for legacy API 0 responses.
+   */
   fee?: Nicks;
+}
+
+/**
+ * An unsigned, unreserved snapshot produced from the wallet's current state.
+ *
+ * `notes` and the summary fields describe this exact transaction snapshot.
+ * `outputs` are the wallet's projection at `blockHeight` under the active
+ * transaction-engine settings. A wallet must still resolve and revalidate the
+ * inputs before signing. Passing these notes back through `signTx` does not
+ * make them authoritative.
+ */
+export interface BuildSimpleTransactionResponse {
+  /** Exact unsigned transaction built by the wallet. */
+  tx: NockchainTx;
+  /** Exact input notes selected for `tx`, in native WASM form. */
+  notes: Note[];
+  /** Output notes projected at `blockHeight` under the active transaction-engine settings. */
+  outputs: Note[];
+  /** Witness-independent hash of `tx.spends`, stable across signing. */
+  intentId: Digest;
+  /** Wallet account used to select inputs and receive change. */
+  accountAddress: Digest;
+  /** Recipient encoded by this transaction snapshot. */
+  to: Digest;
+  /** Chain height against which the snapshot was constructed. */
+  blockHeight: number;
+  /** Recipient amount encoded by the transaction, in canonical nicks. */
+  amount: Nicks;
+  /** Sum of all selected input notes, in canonical nicks. */
+  inputTotal: Nicks;
+  /** Actual fee encoded by the transaction, in canonical nicks. */
+  fee: Nicks;
+  /** Minimum fee calculated for this transaction, in canonical nicks. */
+  minimumFee: Nicks;
+  /** Change returned to the connected wallet account, in canonical nicks. */
+  change: Nicks;
+}
+
+/** @deprecated Use {@link BuildSimpleTransactionRequest}. */
+export interface EstimateTransactionFeeRequest {
+  /** Recipient address (base58-encoded public key hash / PKH) */
+  to: Digest;
+  /** Amount to send in nicks (legacy number + canonical string or SDK bigint accepted) */
+  amount: NicksLike;
+}
+
+/** @deprecated Use the `fee` from {@link BuildSimpleTransactionResponse}. */
+export interface EstimateTransactionFeeResponse {
+  /**
+   * Actual fee encoded in the unsigned snapshot constructed for the estimate.
+   * A later build or send may differ if wallet state changes.
+   */
+  fee: Nicks;
 }
 
 export interface SignTxRequest {

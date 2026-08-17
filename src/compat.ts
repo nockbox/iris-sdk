@@ -108,6 +108,12 @@ function mapRequest(request: RpcRequest, fromApi?: string, toApi?: string): RpcR
       }
       return request;
     }
+    case PROVIDER_METHODS.BUILD_SIMPLE_TRANSACTION: {
+      // This primitive was introduced with API 1. Keep the method and payload
+      // intact across an API boundary so compatible direct callers still work;
+      // older wallets can return their normal method-not-found error.
+      return request;
+    }
     case PROVIDER_METHODS.SIGN_MESSAGE: {
       if (fromV1 && !toV1) {
         // API 1 → legacy: { message: string } → [message]
@@ -273,6 +279,11 @@ function mapResponse(
         }
         return { ...response, result: result.txid };
       }
+      return response;
+    }
+    case PROVIDER_METHODS.BUILD_SIMPLE_TRANSACTION: {
+      // No legacy response remapping is defined. Successful results therefore
+      // pass through unchanged; errors are returned by the early guard above.
       return response;
     }
     case PROVIDER_METHODS.SIGN_MESSAGE: {

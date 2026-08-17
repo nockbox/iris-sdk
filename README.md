@@ -32,12 +32,37 @@ security status is explicitly advisory.
 - The API 1 response includes the transaction ID, canonical amount, and actual
   fee used. When the request is bridged to an API 0 wallet, only `txid` is
   guaranteed because legacy wallets may return a bare transaction ID.
-- `estimateTransactionFee` is read-only and advisory. Wallet state can change
-  between estimation and approval, so dApps must use the fee returned by
-  `sendTransaction` as the final value.
+- `buildSimpleTransaction` was introduced with provider API 1 for constructing
+  a simple send without signing or broadcasting it. It returns the exact
+  unsigned `NockchainTx`, selected input notes, outputs projected at the returned
+  block height under the active transaction-engine settings, witness-independent
+  `intentId`, recipient, and the canonical amount/fee/change summary used for
+  that build.
+- A build is an unreserved snapshot. Wallet state can change after it is
+  returned, so inputs must be revalidated when signing or sending. The wallet
+  must not silently substitute different notes for an approved intent.
+- `notes` are provided so callers can inspect or bridge the exact inputs. They
+  remain untrusted sidecar data if passed back through `signTx`; Iris resolves
+  the transaction inputs against wallet-owned state before signing.
+- `intentId` is stable across witness signatures and can be used to verify that
+  the transaction signed is the transaction built. The raw transaction ID may
+  change when signatures are added.
+- `estimateTransactionFee` remains as a deprecated SDK convenience wrapper. It
+  calls `buildSimpleTransaction` and returns that build's `fee`; there is no
+  separate `nock_estimateTransactionFee` wire method.
 - SDK methods accept bigint nicks and normalize them to canonical strings before
   crossing the Chrome extension messaging boundary. Direct low-level provider
   requests should use canonical strings or legacy safe integers.
+
+```typescript
+const built = await provider.buildSimpleTransaction({
+  to: recipient,
+  amount: 1_000_000n,
+});
+
+console.log(built.fee, built.minimumFee, built.change);
+const signed = await provider.signTx(built.tx, built.notes);
+```
 
 ## 0.3 migration notes
 
@@ -48,3 +73,7 @@ security status is explicitly advisory.
 - API 0 retains its historical bare transaction-ID response. When an API 1
   wallet response is bridged to an API 0 caller, the compatibility layer returns
   the bare `txid` string; API 1 callers receive the object response.
+- The unreleased fee-estimation RPC was broadened to
+  `nock_buildSimpleTransaction`, introduced with API 1. Older wallets generally
+  do not implement it, but compatibility mapping deliberately passes it through
+  unchanged so compatible direct callers are not rejected based on source API.

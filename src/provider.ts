@@ -16,6 +16,8 @@ import type {
   ConnectRequest,
   SendTransactionRequest,
   SendTransactionResponse,
+  BuildSimpleTransactionRequest,
+  BuildSimpleTransactionResponse,
   EstimateTransactionFeeRequest,
   EstimateTransactionFeeResponse,
   NicksLike,
@@ -153,39 +155,61 @@ export class NockchainProvider {
   }
 
   /**
-   * Estimate the network fee for a simple send without sending it.
+   * Build an exact unsigned simple-send transaction without signing or broadcasting it.
    * Read-only: requires an approved origin and unlocked wallet, but shows no approval popup.
-   * Requires API 1 (`nock_estimateTransactionFee` is not available on legacy API 0 wallets).
+   * Introduced with API 1. Older wallets generally do not implement
+   * `nock_buildSimpleTransaction`, though compatibility mapping passes the
+   * method through unchanged rather than rejecting it based on source API.
    *
-   * The estimate is advisory: it depends on the wallet's current UTXO set and may
-   * drift slightly between estimation and an actual send.
+   * The result is an unreserved snapshot of wallet state. Inputs can become
+   * unavailable after this call, so the wallet must revalidate them before
+   * signing or sending. Use `intentId` to bind later approval/signing to the
+   * same witness-independent transaction intent.
    *
-   * @param request - Recipient and amount in nicks
-   * @returns Promise resolving to the estimated fee in nicks
+   * @param request - Recipient, amount, and optional exact fee in nicks
+   * @returns Promise resolving to the unsigned transaction and its exact build metadata
    * @throws {NoAccountError} If no account is connected
    * @throws {RpcError} If the RPC call fails (e.g. wallet locked, no UTXOs)
    *
    * @example
    * ```typescript
-   * const { fee } = await provider.estimateTransactionFee({ to: recipient, amount });
+   * const built = await provider.buildSimpleTransaction({ to: recipient, amount });
+   * const signed = await provider.signTx(built.tx, built.notes);
    * ```
    */
-  async estimateTransactionFee(
-    request: EstimateTransactionFeeRequest
-  ): Promise<EstimateTransactionFeeResponse> {
+  async buildSimpleTransaction(
+    request: BuildSimpleTransactionRequest
+  ): Promise<BuildSimpleTransactionResponse> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }
 
-    const normalizedRequest: EstimateTransactionFeeRequest = {
+    const normalizedRequest: BuildSimpleTransactionRequest = {
       ...request,
       amount: normalizeNicksForRpc(request.amount),
     };
+    if (request.fee !== undefined) {
+      normalizedRequest.fee = normalizeNicksForRpc(request.fee);
+    }
 
-    return this.request<EstimateTransactionFeeRequest, EstimateTransactionFeeResponse>({
-      method: PROVIDER_METHODS.ESTIMATE_TRANSACTION_FEE,
+    return this.request<BuildSimpleTransactionRequest, BuildSimpleTransactionResponse>({
+      method: PROVIDER_METHODS.BUILD_SIMPLE_TRANSACTION,
       params: normalizedRequest,
     });
+  }
+
+  /**
+   * Build a simple transaction and return its calculated fee without signing or sending it.
+   *
+   * @deprecated Use {@link buildSimpleTransaction} when the complete unsigned
+   * transaction snapshot is needed. This convenience method invokes
+   * `nock_buildSimpleTransaction`; there is no separate fee-estimation RPC.
+   */
+  async estimateTransactionFee(
+    request: EstimateTransactionFeeRequest
+  ): Promise<EstimateTransactionFeeResponse> {
+    const { fee } = await this.buildSimpleTransaction(request);
+    return { fee };
   }
 
   /**

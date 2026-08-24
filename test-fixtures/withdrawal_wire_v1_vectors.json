@@ -42,6 +42,52 @@
       "calldata": "0xbcf64e05000000000000000000000000000000000000002386f26fc0ffffffdc790d903f991a7b8a2bfb015302153ce9bb5576b9f4968200de9cbff39262abd3f1ed19f04e4f434b57443121fffffffeffffffff0000000000000000000000000000000100000000000000020000000000000003"
     }
   ],
+  "amount_policy_vectors": [
+    {
+      "name": "zero",
+      "amount_base_units": "0",
+      "expected": "amount_not_positive"
+    },
+    {
+      "name": "one_nick_below_minimum",
+      "amount_base_units": "999999999847412109375",
+      "expected": "amount_below_minimum"
+    },
+    {
+      "name": "minimum_inclusive",
+      "amount_base_units": "1000000000000000000000",
+      "expected": "valid",
+      "amount_nicks": "6553600000",
+      "bridge_fee_nicks": "19500000",
+      "amount_after_bridge_fee_nicks": "6534100000"
+    },
+    {
+      "name": "minimum_plus_one_nick",
+      "amount_base_units": "1000000000152587890625",
+      "expected": "valid",
+      "amount_nicks": "6553600001",
+      "bridge_fee_nicks": "19500195",
+      "amount_after_bridge_fee_nicks": "6534099806"
+    },
+    {
+      "name": "one_base_unit_dust",
+      "amount_base_units": "1000000000000000000001",
+      "expected": "amount_not_divisible"
+    },
+    {
+      "name": "maximum_u64_nicks",
+      "amount_base_units": "2814749767106559999847412109375",
+      "expected": "valid",
+      "amount_nicks": "18446744073709551615",
+      "bridge_fee_nicks": "54887620458577920",
+      "amount_after_bridge_fee_nicks": "18391856453250973695"
+    },
+    {
+      "name": "overflow_u64_nicks",
+      "amount_base_units": "2814749767106560000000000000000",
+      "expected": "amount_overflow"
+    }
+  ],
   "invalid_vectors": [
     {
       "name": "missing_trailer",

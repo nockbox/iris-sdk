@@ -27,6 +27,15 @@ interface ValidFixture {
   calldata: string;
 }
 
+interface AmountPolicyFixture {
+  name: string;
+  amount_base_units: string;
+  expected: 'valid' | WithdrawalWireErrorCode;
+  amount_nicks?: string;
+  bridge_fee_nicks?: string;
+  amount_after_bridge_fee_nicks?: string;
+}
+
 interface InvalidFixture {
   name: string;
   base_vector: string;
@@ -47,6 +56,7 @@ interface WireFixture {
     nock_base_units_per_nick: string;
   };
   valid_vectors: ValidFixture[];
+  amount_policy_vectors: AmountPolicyFixture[];
   invalid_vectors: InvalidFixture[];
 }
 
@@ -160,27 +170,24 @@ test('official encoder rejects number amounts and stale account bindings', () =>
   );
 });
 
-test('policy v1 enforces inclusive minimum, divisibility, and u64 nicks', () => {
-  const minimum = validateWithdrawalPolicyV1Amount(WITHDRAWAL_POLICY_V1.minimumGrossBaseUnits);
-  assert.equal(minimum.amountNicks, WITHDRAWAL_POLICY_V1.minimumGrossNicks);
-  assert.ok(minimum.amountAfterBridgeFeeNicks > 0n);
+test('policy v1 matches the shared amount boundary matrix', () => {
+  for (const vector of fixture.amount_policy_vectors) {
+    const amountBaseUnits = BigInt(vector.amount_base_units);
+    if (vector.expected !== 'valid') {
+      expectWireError(() => validateWithdrawalPolicyV1Amount(amountBaseUnits), vector.expected);
+      continue;
+    }
 
-  expectWireError(
-    () =>
-      validateWithdrawalPolicyV1Amount(
-        WITHDRAWAL_POLICY_V1.minimumGrossBaseUnits - WITHDRAWAL_POLICY_V1.baseUnitsPerNick
-      ),
-    'amount_below_minimum'
-  );
-  expectWireError(
-    () => validateWithdrawalPolicyV1Amount(WITHDRAWAL_POLICY_V1.minimumGrossBaseUnits + 1n),
-    'amount_not_divisible'
-  );
-  expectWireError(
-    () =>
-      validateWithdrawalPolicyV1Amount(
-        (WITHDRAWAL_POLICY_V1.maximumNicks + 1n) * WITHDRAWAL_POLICY_V1.baseUnitsPerNick
-      ),
-    'amount_overflow'
-  );
+    assert.ok(vector.amount_nicks, `${vector.name} has amount nicks`);
+    assert.ok(vector.bridge_fee_nicks, `${vector.name} has bridge fee`);
+    assert.ok(vector.amount_after_bridge_fee_nicks, `${vector.name} has amount after bridge fee`);
+    const result = validateWithdrawalPolicyV1Amount(amountBaseUnits);
+    assert.equal(result.amountNicks, BigInt(vector.amount_nicks), vector.name);
+    assert.equal(result.bridgeFeeNicks, BigInt(vector.bridge_fee_nicks), vector.name);
+    assert.equal(
+      result.amountAfterBridgeFeeNicks,
+      BigInt(vector.amount_after_bridge_fee_nicks),
+      vector.name
+    );
+  }
 });

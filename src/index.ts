@@ -11,5 +11,6 @@ export * from './constants.js';
 export * from './validate-sign-tx-request.js';
 export * from './compat.js';
 export * from './bridge.js';
+export * from './withdrawal.js';
 export * as wasm from './wasm.js';
 export { initWasm } from './wasm.js';

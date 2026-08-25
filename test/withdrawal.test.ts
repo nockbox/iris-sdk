@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { base58 } from '@scure/base';
 
 import {
   WITHDRAWAL_POLICY_V1,
@@ -11,10 +12,13 @@ import {
   validateWithdrawalPolicyV1Amount,
   validateWithdrawalWireV1,
   withdrawalCommitmentV1,
+  resolveWithdrawalDestinationV1,
+  tip5LockRootLimbsFromBase58,
   type Tip5LockRootLimbs,
   type WithdrawalWireErrorCode,
   type WithdrawalWireV1Input,
 } from '../src/withdrawal.js';
+import { initWasm } from '../src/wasm.js';
 
 interface ValidFixture {
   name: string;
@@ -190,4 +194,39 @@ test('policy v1 matches the shared amount boundary matrix', () => {
       vector.name
     );
   }
+});
+
+test('canonical direct lock root decodes to five big-endian Tip5 limbs', () => {
+  const bytes = new Uint8Array(40);
+  for (let index = 0; index < 5; index += 1) {
+    bytes[index * 8 + 7] = index + 1;
+  }
+  const lockRoot = base58.encode(bytes);
+
+  assert.deepEqual(tip5LockRootLimbsFromBase58(lockRoot), [1n, 2n, 3n, 4n, 5n]);
+});
+
+test('v1 PKH destination resolves through its canonical spend lock root', async () => {
+  const destination = 'AD6Mw1QUnPUrnVpyj2gW2jT6Jd6WsuZQmPn79XpZoFEocuvV12iDkvh';
+  const wasmBytes = readFileSync(
+    new URL('../node_modules/@nockbox/iris-wasm/iris_wasm_bg.wasm', import.meta.url)
+  );
+  await initWasm({ module_or_path: wasmBytes });
+  const resolved = await resolveWithdrawalDestinationV1({
+    kind: 'v1_pkh',
+    value: destination,
+  });
+
+  assert.equal(resolved.kind, 'v1_pkh');
+  assert.equal(resolved.normalizedDestination, destination);
+  assert.equal(base58.decode(resolved.lockRoot).length, 40);
+  assert.equal(resolved.lockRootLimbs.length, 5);
+  assert.deepEqual(resolved.lockRootLimbs, tip5LockRootLimbsFromBase58(resolved.lockRoot));
+});
+
+test('bytes32 pseudo-root is rejected', () => {
+  assert.throws(
+    () => tip5LockRootLimbsFromBase58(base58.encode(new Uint8Array(32))),
+    error => error instanceof WithdrawalWireError && error.code === 'invalid_lock_root'
+  );
 });

@@ -1,4 +1,7 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
+import { base58 } from '@scure/base';
+import { initWasm, pkhSingle, spendConditionHash, spendConditionNewPkh } from './wasm.js';
+import type { Digest } from './wasm.js';
 
 export const WITHDRAWAL_WIRE_V1 = {
   protocol: 'WithdrawalWireV1',
@@ -25,6 +28,17 @@ export const WITHDRAWAL_POLICY_V1 = {
 
 export type Hex = `0x${string}`;
 export type Tip5LockRootLimbs = readonly [bigint, bigint, bigint, bigint, bigint];
+
+export type WithdrawalDestinationV1 =
+  | { kind: 'v1_pkh'; value: string }
+  | { kind: 'lock_root'; value: string };
+
+export interface ResolvedWithdrawalDestinationV1 {
+  kind: WithdrawalDestinationV1['kind'];
+  normalizedDestination: string;
+  lockRoot: string;
+  lockRootLimbs: Tip5LockRootLimbs;
+}
 
 export type WithdrawalWireErrorCode =
   | 'invalid_address'
@@ -281,6 +295,69 @@ export function validateWithdrawalWireV1(
   }
 
   return decoded;
+}
+
+export function tip5LockRootLimbsFromBase58(lockRoot: string): Tip5LockRootLimbs {
+  const normalized = normalizeTip5Digest(lockRoot, 'Nockchain lock root');
+  const bytes = base58.decode(normalized);
+  const limbs: Tip5LockRootLimbs = [
+    bytesToBigint(bytes.subarray(0, 8)),
+    bytesToBigint(bytes.subarray(8, 16)),
+    bytesToBigint(bytes.subarray(16, 24)),
+    bytesToBigint(bytes.subarray(24, 32)),
+    bytesToBigint(bytes.subarray(32, 40)),
+  ];
+  validateLockRootLimbs(limbs);
+  return limbs;
+}
+
+export async function resolveWithdrawalDestinationV1(
+  destination: WithdrawalDestinationV1
+): Promise<ResolvedWithdrawalDestinationV1> {
+  const normalizedDestination = normalizeTip5Digest(
+    destination.value,
+    destination.kind === 'v1_pkh' ? 'Nockchain v1 PKH address' : 'Nockchain lock root'
+  );
+
+  let lockRoot = normalizedDestination;
+  if (destination.kind === 'v1_pkh') {
+    await initWasm();
+    const spendCondition = spendConditionNewPkh(pkhSingle(normalizedDestination as Digest));
+    lockRoot = normalizeTip5Digest(
+      String(spendConditionHash(spendCondition)),
+      'derived Nockchain lock root'
+    );
+  }
+
+  return {
+    kind: destination.kind,
+    normalizedDestination,
+    lockRoot,
+    lockRootLimbs: tip5LockRootLimbsFromBase58(lockRoot),
+  };
+}
+
+function normalizeTip5Digest(value: string, label: string): string {
+  const normalized = value.trim();
+  let bytes: Uint8Array;
+  try {
+    bytes = base58.decode(normalized);
+  } catch {
+    throw new WithdrawalWireError('invalid_lock_root', `${label} must be canonical base58`);
+  }
+  if (bytes.length !== WITHDRAWAL_WIRE_V1.fullLockRootLength) {
+    throw new WithdrawalWireError(
+      'invalid_lock_root',
+      `${label} must decode to exactly ${WITHDRAWAL_WIRE_V1.fullLockRootLength} bytes`
+    );
+  }
+  if (base58.encode(bytes) !== normalized) {
+    throw new WithdrawalWireError(
+      'invalid_lock_root',
+      `${label} must use canonical base58 encoding`
+    );
+  }
+  return normalized;
 }
 
 function normalizeInput(input: WithdrawalWireV1Input): NormalizedWithdrawalWireV1Input {

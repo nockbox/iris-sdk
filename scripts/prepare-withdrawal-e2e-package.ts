@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 
 const EXPECTED_PACKAGE_NAME = '@nockbox/iris-sdk';
 const DRIVER_PATH = 'dist/e2e/encode-withdrawal-e2e.js';
+const WASM_PATH = 'dist/e2e/iris_wasm_bg.wasm';
 const METADATA_SCHEMA_VERSION = 1;
 const execFileAsync = promisify(execFile);
 
@@ -91,6 +92,14 @@ export async function prepareIrisE2ePackage(
   const npmVersion = (await run('npm', ['--version'], checkout)).stdout.trim();
   requireSupportedToolchain(nodeVersion, npmVersion);
   await run('npm', ['run', 'test:pack-readiness', '--silent', '--offline'], checkout);
+  const wasmDestination = resolve(checkout, WASM_PATH);
+  const dependencyWasm = resolve(
+    checkout,
+    'node_modules/@nockbox/iris-wasm/iris_wasm_bg.wasm'
+  );
+  if (!(await pathExists(wasmDestination))) {
+    await copyFile(dependencyWasm, wasmDestination);
+  }
   await mkdir(outputDir, { recursive: true });
 
   const expectedFilename = `${packageJson.name.replace(/^@/, '').replace('/', '-')}-${packageJson.version}.tgz`;
@@ -249,8 +258,10 @@ function validatePackedFiles(files: readonly PackedFileFacts[]): void {
       throw new Error(`unexpected or sensitive npm package entry ${normalized}`);
     }
   }
-  if (!paths.has(DRIVER_PATH) || !paths.has('package.json')) {
-    throw new Error('npm package is missing the bundled withdrawal driver or package.json');
+  if (!paths.has(DRIVER_PATH) || !paths.has(WASM_PATH) || !paths.has('package.json')) {
+    throw new Error(
+      'npm package is missing the bundled withdrawal driver, WASM module, or package.json'
+    );
   }
 }
 

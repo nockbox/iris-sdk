@@ -41,6 +41,7 @@ test('clean checkout packs deterministically with immutable identity and executa
   assert.match(first.npm_shasum, /^[0-9a-f]{40}$/);
   assert.equal(first.driver_path, 'dist/e2e/encode-withdrawal-e2e.js');
   assert.ok(first.files.some(file => file.path === first.driver_path));
+  assert.ok(first.files.some(file => file.path === 'dist/e2e/iris_wasm_bg.wasm'));
   assert.ok(first.files.every(file => allowedPackagePath(file.path)));
   assert.equal(first.tarball_sha256, second.tarball_sha256);
   assert.equal(first.npm_integrity, second.npm_integrity);
@@ -201,6 +202,7 @@ function createFixture(label: string, options: FixtureOptions = {}) {
       '',
     ].join('\n')
   );
+  writeFileSync(join(checkout, 'dist', 'e2e', 'iris_wasm_bg.wasm'), 'fixture wasm\n');
   if (options.includeSecret) {
     writeFileSync(join(checkout, 'dist', 'secret.pem'), 'not-a-real-secret\n');
   }

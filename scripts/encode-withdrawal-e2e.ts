@@ -1,5 +1,6 @@
+import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
 import {
@@ -268,8 +269,21 @@ export async function runWithdrawalE2eJson(input: string): Promise<WithdrawalE2e
 }
 
 async function initializeNodeWasmWithoutStdout(): Promise<void> {
-  const wasmUrl = import.meta.resolve('@nockbox/iris-wasm/iris_wasm_bg.wasm');
-  const wasmBytes = await readFile(fileURLToPath(wasmUrl));
+  let wasmBytes: Buffer;
+  try {
+    wasmBytes = await readFile(new URL('./iris_wasm_bg.wasm', import.meta.url));
+  } catch (error) {
+    if (
+      typeof error !== 'object' ||
+      error === null ||
+      !('code' in error) ||
+      error.code !== 'ENOENT'
+    ) {
+      throw error;
+    }
+    const dependencyUrl = import.meta.resolve('@nockbox/iris-wasm/iris_wasm_bg.wasm');
+    wasmBytes = await readFile(new URL(dependencyUrl));
+  }
   await withoutStdoutContamination(() => initWasm({ module_or_path: wasmBytes }));
 }
 
@@ -379,7 +393,9 @@ export async function runWithdrawalE2eCli(): Promise<number> {
   return response.ok ? 0 : 1;
 }
 
-const entrypoint = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;
+const entrypoint = process.argv[1]
+  ? pathToFileURL(realpathSync(resolve(process.argv[1]))).href
+  : undefined;
 if (entrypoint === import.meta.url) {
   runWithdrawalE2eCli()
     .then(exitCode => {

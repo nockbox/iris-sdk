@@ -7,5 +7,5 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["scripts/encode-withdrawal-e2e.ts"]
+  "include": ["scripts/*.ts"]
 }

@@ -35,7 +35,9 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit && tsc --project tsconfig.e2e.json --noEmit",
     "test": "npm run build --silent && tsx --test test/*.test.ts",
+    "test:pack-readiness": "npm run build --silent && tsx --test test/withdrawal.test.ts test/withdrawal-e2e-driver.test.ts",
     "withdrawal:e2e": "npm run build --silent && node dist/e2e/encode-withdrawal-e2e.js",
+    "package:withdrawal-e2e": "tsx scripts/prepare-withdrawal-e2e-package.ts",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

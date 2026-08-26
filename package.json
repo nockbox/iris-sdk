@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "iris-withdrawal-e2e": "./dist/e2e/encode-withdrawal-e2e.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -21,15 +24,18 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:sdk && npm run build:e2e-driver",
+    "build:sdk": "tsc",
+    "build:e2e-driver": "tsc --project tsconfig.e2e.json --noEmit && esbuild scripts/encode-withdrawal-e2e.ts --bundle --platform=node --format=esm --target=node22 --banner:js='#!/usr/bin/env node' --outfile=dist/e2e/encode-withdrawal-e2e.js",
     "prepare": "npm run build",
     "build-example": "npm run build && tsc --project examples/tsconfig.json && vite build --config vite.config.examples.ts",
     "dev": "tsc --watch",
     "dev-example": "vite --config vite.config.examples.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/withdrawal.test.ts",
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.e2e.json --noEmit",
+    "test": "npm run build --silent && tsx --test test/*.test.ts",
+    "withdrawal:e2e": "npm run build --silent && node dist/e2e/encode-withdrawal-e2e.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -43,6 +49,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "0.21.5",
     "prettier": "^3.4.2",
     "tsx": "4.23.12",
     "typescript": "^5.5.3",

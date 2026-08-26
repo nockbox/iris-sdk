@@ -1,7 +1,13 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { base58 } from '@scure/base';
-import { initWasm, pkhSingle, spendConditionHash, spendConditionNewPkh } from './wasm.js';
-import type { Digest } from './wasm.js';
+import {
+  digestToProtobuf,
+  initWasm,
+  pkhSingle,
+  spendConditionHash,
+  spendConditionNewPkh,
+} from './wasm.js';
+import type { Digest, PbCom1Belt } from './wasm.js';
 
 export const WITHDRAWAL_WIRE_V1 = {
   protocol: 'WithdrawalWireV1',
@@ -311,6 +317,36 @@ export function tip5LockRootLimbsFromBase58(lockRoot: string): Tip5LockRootLimbs
   return limbs;
 }
 
+function tip5LockRootLimbsFromDigest(digest: Digest): Tip5LockRootLimbs {
+  const protobuf = digestToProtobuf(digest);
+  const belts: readonly (PbCom1Belt | null | undefined)[] = [
+    protobuf.belt_1,
+    protobuf.belt_2,
+    protobuf.belt_3,
+    protobuf.belt_4,
+    protobuf.belt_5,
+  ];
+  const beltValue = (belt: PbCom1Belt | null | undefined): bigint => {
+    const value = belt?.value;
+    if (typeof value !== 'string') {
+      throw new WithdrawalWireError(
+        'invalid_lock_root',
+        'Nockchain lock root did not decode to five Tip5 limbs'
+      );
+    }
+    return BigInt(value);
+  };
+  const limbs: Tip5LockRootLimbs = [
+    beltValue(belts[0]),
+    beltValue(belts[1]),
+    beltValue(belts[2]),
+    beltValue(belts[3]),
+    beltValue(belts[4]),
+  ];
+  validateLockRootLimbs(limbs);
+  return limbs;
+}
+
 export async function resolveWithdrawalDestinationV1(
   destination: WithdrawalDestinationV1
 ): Promise<ResolvedWithdrawalDestinationV1> {
@@ -320,20 +356,22 @@ export async function resolveWithdrawalDestinationV1(
   );
 
   let lockRoot = normalizedDestination;
+  let lockRootLimbs: Tip5LockRootLimbs;
   if (destination.kind === 'v1_pkh') {
     await initWasm();
     const spendCondition = spendConditionNewPkh(pkhSingle(normalizedDestination as Digest));
-    lockRoot = normalizeTip5Digest(
-      String(spendConditionHash(spendCondition)),
-      'derived Nockchain lock root'
-    );
+    const derivedLockRoot = spendConditionHash(spendCondition);
+    lockRoot = normalizeTip5Digest(String(derivedLockRoot), 'derived Nockchain lock root');
+    lockRootLimbs = tip5LockRootLimbsFromDigest(derivedLockRoot);
+  } else {
+    lockRootLimbs = tip5LockRootLimbsFromBase58(lockRoot);
   }
 
   return {
     kind: destination.kind,
     normalizedDestination,
     lockRoot,
-    lockRootLimbs: tip5LockRootLimbsFromBase58(lockRoot),
+    lockRootLimbs,
   };
 }
 

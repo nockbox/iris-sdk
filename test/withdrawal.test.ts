@@ -221,7 +221,13 @@ test('v1 PKH destination resolves through its canonical spend lock root', async 
   assert.equal(resolved.normalizedDestination, destination);
   assert.equal(base58.decode(resolved.lockRoot).length, 40);
   assert.equal(resolved.lockRootLimbs.length, 5);
-  assert.deepEqual(resolved.lockRootLimbs, tip5LockRootLimbsFromBase58(resolved.lockRoot));
+  assert.deepEqual(resolved.lockRootLimbs, [
+    12_977_106_315_425_463_920n,
+    3_763_978_537_871_087_579n,
+    1_234_138_158_316_650_842n,
+    4_616_755_078_196_705_664n,
+    5_093_069_046_709_966_084n,
+  ]);
 });
 
 test('bytes32 pseudo-root is rejected', () => {

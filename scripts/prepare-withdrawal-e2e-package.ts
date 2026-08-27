@@ -93,10 +93,7 @@ export async function prepareIrisE2ePackage(
   requireSupportedToolchain(nodeVersion, npmVersion);
   await run('npm', ['run', 'test:pack-readiness', '--silent', '--offline'], checkout);
   const wasmDestination = resolve(checkout, WASM_PATH);
-  const dependencyWasm = resolve(
-    checkout,
-    'node_modules/@nockbox/iris-wasm/iris_wasm_bg.wasm'
-  );
+  const dependencyWasm = resolve(checkout, 'node_modules/@nockbox/iris-wasm/iris_wasm_bg.wasm');
   if (!(await pathExists(wasmDestination))) {
     await copyFile(dependencyWasm, wasmDestination);
   }

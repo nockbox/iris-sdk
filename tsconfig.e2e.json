@@ -1,11 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": ".",
-    "outDir": "./dist/e2e",
-    "declaration": false,
-    "declarationMap": false,
-    "sourceMap": false
+    "rootDir": "."
   },
   "include": ["scripts/*.ts"]
 }

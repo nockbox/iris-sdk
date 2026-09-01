@@ -1,6 +1,6 @@
 {
   "name": "@nockbox/iris-sdk",
-  "version": "0.2.0",
+  "version": "0.3.3",
   "description": "TypeScript SDK for interacting with Iris wallet extension",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,21 +13,31 @@
     "./wasm": {
       "types": "./dist/wasm.d.ts",
       "import": "./dist/wasm.js"
+    },
+    "./withdrawal": {
+      "types": "./dist/withdrawal.d.ts",
+      "import": "./dist/withdrawal.js"
     }
   },
   "files": [
     "dist",
+    "test-fixtures",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:sdk && npm run build:e2e-driver",
+    "build:sdk": "tsc",
+    "build:e2e-driver": "tsc --project tsconfig.e2e.json --noEmit && esbuild scripts/encode-withdrawal-e2e.ts --bundle --platform=node --format=esm --target=node22 --banner:js='#!/usr/bin/env node' --outfile=dist/e2e/encode-withdrawal-e2e.js",
     "prepare": "npm run build",
     "build-example": "npm run build && tsc --project examples/tsconfig.json && vite build --config vite.config.examples.ts",
     "dev": "tsc --watch",
     "dev-example": "vite --config vite.config.examples.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.e2e.json --noEmit",
+    "test": "npm run build --silent && tsx --test test/*.test.ts",
+    "test:pack-readiness": "npm run build --silent && tsx --test test/withdrawal.test.ts test/withdrawal-e2e-driver.test.ts",
+    "package:withdrawal-e2e": "tsx scripts/prepare-withdrawal-e2e-package.ts",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -41,7 +51,9 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "0.21.5",
     "prettier": "^3.4.2",
+    "tsx": "4.23.12",
     "typescript": "^5.5.3",
     "vite": "^5.0.0"
   },
@@ -50,6 +62,7 @@
     "url": "https://github.com/nockbox/iris-sdk.git"
   },
   "dependencies": {
+    "@noble/hashes": "2.3.0",
     "@nockbox/iris-wasm": "0.2.0",
     "@scure/base": "^2.0.0"
   }

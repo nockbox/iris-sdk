@@ -2,11 +2,10 @@
  * WASM module exports
  */
 
-export * from '@nockbox/iris-wasm/iris_wasm';
-export { default } from '@nockbox/iris-wasm/iris_wasm';
-export * as guard from '@nockbox/iris-wasm/iris_wasm.guard';
+export * from '@nockbox/iris-wasm/iris_wasm.js';
+export { default } from '@nockbox/iris-wasm/iris_wasm.js';
 
-import init from '@nockbox/iris-wasm/iris_wasm';
+import init from '@nockbox/iris-wasm/iris_wasm.js';
 
 /**
  * Canonical initializer re-export for SDK consumers.

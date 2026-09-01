@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -25,6 +25,9 @@ jobs:
 
       - name: TypeScript compilation check
         run: npm run typecheck
+
+      - name: Withdrawal protocol vectors
+        run: npm test
 
       - name: Format check
         run: npm run format:check

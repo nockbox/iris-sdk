@@ -51,7 +51,7 @@
     "url": "https://github.com/nockbox/iris-sdk.git"
   },
   "dependencies": {
-    "@nockbox/iris-wasm": "0.2.0",
+    "@nockbox/iris-wasm": "^0.2.2",
     "@scure/base": "^2.0.0"
   }
 }

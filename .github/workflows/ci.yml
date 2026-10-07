@@ -34,3 +34,6 @@ jobs:
 
       - name: Build examples
         run: npm run build-example
+
+      - name: Test RPC input normalization
+        run: npm test

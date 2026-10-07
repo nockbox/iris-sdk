@@ -15,10 +15,21 @@ import type {
   SignMessageResponse,
   ConnectRequest,
   SendTransactionRequest,
+  SendTransactionResponse,
+  BuildSimpleTransactionRequest,
+  BuildSimpleTransactionResponse,
+  EstimateTransactionFeeRequest,
+  EstimateTransactionFeeResponse,
+  NicksLike,
 } from './types.js';
 import { WalletNotInstalledError, UserRejectedError, RpcError, NoAccountError } from './errors.js';
 import { PROVIDER_METHODS, RPC_API_VERSION } from './constants.js';
 import { NockchainTx, Note } from '@nockbox/iris-wasm';
+
+/** Chrome extension messaging cannot serialize bigint values. */
+function normalizeNicksForRpc(value: NicksLike): Exclude<NicksLike, bigint> {
+  return typeof value === 'bigint' ? (value.toString() as Exclude<NicksLike, bigint>) : value;
+}
 
 /**
  * NockchainProvider class - Main interface for dApps to interact with Iris wallet
@@ -36,7 +47,7 @@ import { NockchainTx, Note } from '@nockbox/iris-wasm';
  *   .amount(1_000_000)
  *   .build();
  *
- * const txId = await nockchain.sendTransaction(tx);
+ * const { txid, fee } = await nockchain.sendTransaction(tx);
  * ```
  */
 export class NockchainProvider {
@@ -118,20 +129,87 @@ export class NockchainProvider {
   /**
    * Send a transaction
    * @param transaction - The transaction object to send
-   * @returns Promise resolving to the transaction ID
+   * @returns Promise resolving to the transaction ID and, for API 1 wallets,
+   * the canonical amount and actual fee used by the built transaction
    * @throws {NoAccountError} If no account is connected
    * @throws {UserRejectedError} If the user rejects the transaction
    * @throws {RpcError} If the RPC call fails
    */
-  async sendTransaction(transaction: SendTransactionRequest): Promise<string> {
+  async sendTransaction(transaction: SendTransactionRequest): Promise<SendTransactionResponse> {
     if (!this.isConnected) {
       throw new NoAccountError();
     }
 
-    return this.request<SendTransactionRequest, string>({
+    const normalizedTransaction: SendTransactionRequest = {
+      ...transaction,
+      amount: normalizeNicksForRpc(transaction.amount),
+    };
+    if (transaction.fee !== undefined) {
+      normalizedTransaction.fee = normalizeNicksForRpc(transaction.fee);
+    }
+
+    return this.request<SendTransactionRequest, SendTransactionResponse>({
       method: PROVIDER_METHODS.SEND_TRANSACTION,
-      params: transaction,
+      params: normalizedTransaction,
     });
+  }
+
+  /**
+   * Build an exact unsigned simple-send transaction without signing or broadcasting it.
+   * Read-only: requires an approved origin and unlocked wallet, but shows no approval popup.
+   * Introduced with API 1. Older wallets generally do not implement
+   * `nock_buildSimpleTransaction`, though compatibility mapping passes the
+   * method through unchanged rather than rejecting it based on source API.
+   *
+   * The result is an unreserved snapshot of wallet state. Inputs can become
+   * unavailable after this call, so the wallet must revalidate them before
+   * signing or sending. Use `intentId` to bind later approval/signing to the
+   * same witness-independent transaction intent.
+   *
+   * @param request - Recipient, amount, and optional exact fee in nicks
+   * @returns Promise resolving to the unsigned transaction and its exact build metadata
+   * @throws {NoAccountError} If no account is connected
+   * @throws {RpcError} If the RPC call fails (e.g. wallet locked, no UTXOs)
+   *
+   * @example
+   * ```typescript
+   * const built = await provider.buildSimpleTransaction({ to: recipient, amount });
+   * const signed = await provider.signTx(built.tx, built.notes);
+   * ```
+   */
+  async buildSimpleTransaction(
+    request: BuildSimpleTransactionRequest
+  ): Promise<BuildSimpleTransactionResponse> {
+    if (!this.isConnected) {
+      throw new NoAccountError();
+    }
+
+    const normalizedRequest: BuildSimpleTransactionRequest = {
+      ...request,
+      amount: normalizeNicksForRpc(request.amount),
+    };
+    if (request.fee !== undefined) {
+      normalizedRequest.fee = normalizeNicksForRpc(request.fee);
+    }
+
+    return this.request<BuildSimpleTransactionRequest, BuildSimpleTransactionResponse>({
+      method: PROVIDER_METHODS.BUILD_SIMPLE_TRANSACTION,
+      params: normalizedRequest,
+    });
+  }
+
+  /**
+   * Build a simple transaction and return its calculated fee without signing or sending it.
+   *
+   * @deprecated Use {@link buildSimpleTransaction} when the complete unsigned
+   * transaction snapshot is needed. This convenience method invokes
+   * `nock_buildSimpleTransaction`; there is no separate fee-estimation RPC.
+   */
+  async estimateTransactionFee(
+    request: EstimateTransactionFeeRequest
+  ): Promise<EstimateTransactionFeeResponse> {
+    const { fee } = await this.buildSimpleTransaction(request);
+    return { fee };
   }
 
   /**

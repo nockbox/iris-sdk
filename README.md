@@ -63,17 +63,3 @@ const built = await provider.buildSimpleTransaction({
 console.log(built.fee, built.minimumFee, built.change);
 const signed = await provider.signTx(built.tx, built.notes);
 ```
-
-## 0.3 migration notes
-
-- **TypeScript breaking change:** `sendTransaction()` is now typed as returning
-  `{ txid, amount?, fee? }` instead of `string`. This corrects the API 1 type to
-  match the object Iris already returns at runtime. Update code that treated the
-  result itself as the transaction ID to read `result.txid` instead.
-- API 0 retains its historical bare transaction-ID response. When an API 1
-  wallet response is bridged to an API 0 caller, the compatibility layer returns
-  the bare `txid` string; API 1 callers receive the object response.
-- The unreleased fee-estimation RPC was broadened to
-  `nock_buildSimpleTransaction`, introduced with API 1. Older wallets generally
-  do not implement it, but compatibility mapping deliberately passes it through
-  unchanged so compatible direct callers are not rejected based on source API.
